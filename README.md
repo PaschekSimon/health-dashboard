@@ -39,6 +39,8 @@ Google Health API ──> google-health-mcp ──> MCP cache (daily values, sle
 - `backend/` is the API the dashboard talks to, plus an optional MCP server so
   Claude (or another MCP client) can read the same numbers and add notes.
 - `frontend/` is plain HTML, CSS and JavaScript. There is no build step.
+- `web/` is the same dashboard ported to React + TypeScript, served at `/next/`
+  until it replaces `frontend/` (build steps in [web/README.md](web/README.md)).
 
 ## Requirements
 
@@ -164,6 +166,7 @@ kind excludes what is set in `scripts/annotation_effects.py`.
 
 ```
 frontend/   the dashboard (index.html, app.js, charts.js, style.css), vendor/ (Leaflet, fonts), app icons
+web/        the React + TypeScript port of the dashboard (Vite), served at /next/
 backend/    FastAPI app, MCP server, health_core/ (queries, sync jobs, annotations), tests/
 scripts/    sync, Takeout import, scores and analyses (standard library only)
 docs/       scores.md (how the scores work), api.md (endpoints, MCP tools)

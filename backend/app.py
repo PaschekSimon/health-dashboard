@@ -23,6 +23,8 @@ from health_core import annotations as ann
 from health_core import explore, jobs, queries
 
 WEB = Path(__file__).resolve().parent.parent / "frontend"
+# the React port (web/), once built with `npm run build`; served at /next/ until it replaces /app/
+WEB_NEXT = Path(__file__).resolve().parent.parent / "web" / "dist"
 # Windows' registry doesn't always know these, and Chrome wants the right type
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("font/woff2", ".woff2")
@@ -346,9 +348,11 @@ async def revalidate_web(request, call_next):
     """Make the browser re-check the app files on every load, so edits show up
     without a hard refresh (unchanged files still come back as 304)."""
     response = await call_next(request)
-    if request.url.path.startswith("/app"):
+    if request.url.path.startswith(("/app", "/next")):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
 
 app.mount("/app", StaticFiles(directory=WEB, html=True), name="web")
+if WEB_NEXT.is_dir():
+    app.mount("/next", StaticFiles(directory=WEB_NEXT, html=True), name="web-next")
