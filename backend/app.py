@@ -5,13 +5,17 @@
 Endpoints are listed in docs/api.md; interactive docs at http://127.0.0.1:8765/docs.
 """
 
+import ipaddress
+import mimetypes
+import os
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -19,11 +23,18 @@ from health_core import annotations as ann
 from health_core import explore, jobs, queries
 
 WEB = Path(__file__).resolve().parent.parent / "frontend"
+# Windows' registry doesn't always know these, and Chrome wants the right type
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 @asynccontextmanager
 async def lifespan(_app):
     conn = ann.connect()
+    # WAL lets the API keep reading while a sync or recompute rewrites the score
+    # tables (otherwise a request waits up to the 30 s busy timeout). The mode
+    # is stored in health.db, so this switches it once for every program.
+    conn.execute("PRAGMA journal_mode=WAL")
     ann.ensure_schema(conn)  # annotations + sync_runs exist before the first request
     conn.close()
     jobs.connect().close()
@@ -31,6 +42,55 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Health backend", version="1.0", lifespan=lifespan)
+
+
+# ------------------------------------------------------------- guard ----
+# The API has no login: it trusts whoever can reach it (this PC, and your
+# tailnet through `tailscale serve`). Two checks keep other websites out:
+#  - Host: only names that can point here. A public name that resolves to
+#    127.0.0.1 (DNS rebinding) carries its own Host and is turned away.
+#  - Origin: a page on another site can still fire a simple POST at
+#    127.0.0.1 (e.g. /annotations/5/confirm); the browser sends that site as
+#    Origin, so writes from any origin but ours are refused.
+# Extra host names (comma-separated) can be added with HEALTH_ALLOWED_HOSTS.
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+EXTRA_HOSTS = {h.strip().lower() for h in os.environ.get("HEALTH_ALLOWED_HOSTS", "").split(",") if h.strip()}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def allowed_host(name):
+    """localhost, an IP address, a Tailscale name (*.ts.net), a bare machine
+    name without dots, or HEALTH_ALLOWED_HOSTS. A rebinding attack needs a
+    public DNS name, and those always have a dot."""
+    name = (name or "").lower().rstrip(".")
+    if not name:
+        return False
+    if name in LOCAL_HOSTS or name in EXTRA_HOSTS or name.endswith(".ts.net") or "." not in name:
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
+def _hostname(netloc):
+    try:
+        return urlsplit("//" + netloc).hostname
+    except ValueError:
+        return None
+
+
+@app.middleware("http")
+async def same_site_only(request, call_next):
+    if not allowed_host(_hostname(request.headers.get("host", ""))):
+        return PlainTextResponse("unknown host", status_code=403)
+    origin = request.headers.get("origin")
+    if origin and request.method not in SAFE_METHODS:
+        if origin == "null" or not allowed_host(urlsplit(origin).hostname):
+            return PlainTextResponse("cross-site request refused", status_code=403)
+    return await call_next(request)
 
 
 def _db():
@@ -246,7 +306,7 @@ def _set_status(ann_id, status):
     try:
         a, changed = ann.set_status(conn, ann_id, status)
     except KeyError:
-        raise HTTPException(404, "no such annotation")
+        raise HTTPException(404, "no such annotation") from None
     finally:
         conn.close()
     return _with_recompute(a, changed)
@@ -268,7 +328,7 @@ def delete_annotation(ann_id: int):
     try:
         a, changed = ann.delete(conn, ann_id)
     except KeyError:
-        raise HTTPException(404, "no such annotation")
+        raise HTTPException(404, "no such annotation") from None
     finally:
         conn.close()
     return _with_recompute(a, changed)

@@ -39,6 +39,12 @@ Creating, confirming, rejecting or deleting a **confirmed alcohol or illness**
 annotation starts a recompute (the four analysis scripts); the response carries
 it under `recompute` (poll `/sync/{id}`).
 
+Requests with a `Host` the API doesn't know (anything but `127.0.0.1`,
+`localhost`, an IP address, `*.ts.net`, a bare machine name or a name in
+`HEALTH_ALLOWED_HOSTS`) get a 403, and so do writes (POST, DELETE) whose
+`Origin` is another site. This keeps web pages on other sites from changing
+your data through your browser.
+
 ## Sync rules
 
 - A sync job runs `google-health-mcp sync` (MCP cache: daily values, sleep,

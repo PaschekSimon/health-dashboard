@@ -94,7 +94,7 @@ def _iso(value, field, required=True):
         else:
             datetime.fromisoformat(value)
     except (TypeError, ValueError):
-        raise AnnotationError(f"{field} must be an ISO date or datetime, got {value!r}")
+        raise AnnotationError(f"{field} must be an ISO date or datetime, got {value!r}") from None
     return value
 
 
@@ -116,7 +116,7 @@ def _attrs(value):
         try:
             value = json.loads(value)
         except json.JSONDecodeError:
-            raise AnnotationError("attrs must be a JSON object")
+            raise AnnotationError("attrs must be a JSON object") from None
     if not isinstance(value, dict):
         raise AnnotationError("attrs must be a JSON object")
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
