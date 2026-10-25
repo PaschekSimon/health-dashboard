@@ -47,6 +47,7 @@ def scoring_env(mp, fx, config_path):
     mp.setattr(sc, "START", fx.start)
     mp.setattr(sc, "CONFIG", config_path)
     mp.setattr(sc, "_MINUTE_HR", None)  # per-process cache of per-minute HR
+    mp.setattr(sc, "_CACHE", None)      # raw-data cache refreshed once per process
     mp.setattr(sc, "today_local", lambda: fx.today)
     mp.setattr(healthspan, "START", bl.ANALYSIS_START)
 
