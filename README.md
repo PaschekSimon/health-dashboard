@@ -124,6 +124,16 @@ only; `tailscale serve status` shows the address
 (`https://<pc-name>.<tailnet>.ts.net/`). Don't use `tailscale funnel`, which
 would make the dashboard public.
 
+On the phone, open that address in Chrome and choose **Install app** (or
+**Add to home screen**): the dashboard gets its own icon and opens without the
+browser bar.
+
+The API has no login, so it only answers to host names that can point at it
+(`127.0.0.1`, `localhost`, IP addresses, `*.ts.net`, bare machine names) and
+refuses writes that another website's page sends. If you reach it under
+another name, add that name to the `HEALTH_ALLOWED_HOSTS` environment variable
+(comma-separated) before starting the backend.
+
 ## Staying up to date
 
 Opening the dashboard starts a sync (skipped if one finished in the last
@@ -153,7 +163,7 @@ kind excludes what is set in `scripts/annotation_effects.py`.
 ## Project layout
 
 ```
-frontend/   the dashboard (index.html, app.js, charts.js, style.css)
+frontend/   the dashboard (index.html, app.js, charts.js, style.css), vendor/ (Leaflet, fonts), app icons
 backend/    FastAPI app, MCP server, health_core/ (queries, sync jobs, annotations), tests/
 scripts/    sync, Takeout import, scores and analyses (standard library only)
 docs/       scores.md (how the scores work), api.md (endpoints, MCP tools)
@@ -166,7 +176,10 @@ cache and the Google tokens live in google-health-mcp's own folders
 (`~/.local/share/google-health-mcp`, `~/.config/google-health-mcp`). The
 `.gitignore` keeps data, logs, tokens and OAuth client files out of git.
 
-## Tests
+## Tests and linting
+
+`ruff check .` lints the Python code (settings in `ruff.toml`). To run it on
+every commit: `uv tool install pre-commit`, then `pre-commit install` once.
 
 With the API running:
 

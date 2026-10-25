@@ -1,0 +1,13 @@
+# Lint with: ruff check .   (also runs as a pre-commit hook, see .pre-commit-config.yaml)
+target-version = "py312"
+line-length = 130
+
+[lint]
+# F: pyflakes (unused imports, undefined names), E9: syntax errors,
+# B: bugbear (likely bugs), DTZ003/DTZ004: datetime.utcnow/utcfromtimestamp,
+# deprecated since Python 3.12.
+select = ["F", "E9", "B", "DTZ003", "DTZ004"]
+ignore = [
+    "B008",  # Query(...) as a default argument is how FastAPI declares parameters
+    "B905",  # zip() without strict=: the zipped sequences here are built to match
+]

@@ -106,7 +106,7 @@ def run():
             continue  # walks aren't training; they would inflate the easy share
         zones = bl.hr_zones(health, w["day"])
         tot, below1, belowv = easy.get(w["day"], (0, 0, 0))
-        for t, b, d in rr.durations(samples, t1):
+        for _t, b, d in rr.durations(samples, t1):
             tot += d
             below1 += d * (b < zones["MODERATE"][0])
             belowv += d * (b < zones["VIGOROUS"][0])

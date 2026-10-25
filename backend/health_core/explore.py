@@ -11,7 +11,7 @@ import json
 import math
 import re
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 from . import annotations as ann
 from .queries import WATCH, _all, _annotations_by_date, _d, _one, _range, _round, short_id
@@ -32,10 +32,15 @@ def _span(fr, to):
     return _epoch(fr) - 86400, _epoch(_d(to) + timedelta(days=1)) + 86400
 
 
+def _utc(t):
+    """Naive datetime of an epoch in UTC; with the offset added first it reads as local clock time."""
+    return datetime.fromtimestamp(t, UTC).replace(tzinfo=None)
+
+
 def _local(t, off):
     if t is None:
         return None
-    return datetime.utcfromtimestamp(t + (off or 0)).isoformat(timespec="seconds")
+    return _utc(t + (off or 0)).isoformat(timespec="seconds")
 
 
 # ------------------------------------------------------------ activity ----
@@ -89,7 +94,7 @@ def day_detail(db, day):
     lo, hi = _span(ds, ds)
     dexpr = LOCAL_DAY.format(c="t")
     # bucket on local time, so the bucket start is already a local clock time
-    hr = [{"t": datetime.utcfromtimestamp(r["b"] * 300).isoformat(timespec="minutes"), "bpm": round(r["v"], 1),
+    hr = [{"t": _utc(r["b"] * 300).isoformat(timespec="minutes"), "bpm": round(r["v"], 1),
            "min": r["mn"], "max": r["mx"]}
           for r in _all(db.h, f"SELECT (t + coalesce(utc_offset,0)) / 300 b, avg(bpm) v, min(bpm) mn, "
                               f"max(bpm) mx FROM hr_samples WHERE t BETWEEN ? AND ? AND {dexpr} = ? "
@@ -346,7 +351,7 @@ def longterm(db):
         monthly[metric] = [{"month": m, "mean": round(sum(v) / len(v), 2), "n": len(v)} for m, v in sorted(acc.items())]
     vo2 = [_round(r, 2) for r in _all(db.m, "SELECT date, vo2_max, cardio_fitness_level FROM cardio_fitness "
                                             "ORDER BY date")]
-    run_vo2 = [{"date": datetime.utcfromtimestamp(r["t"] + (r["utc_offset"] or 0)).date().isoformat(),
+    run_vo2 = [{"date": _utc(r["t"] + (r["utc_offset"] or 0)).date().isoformat(),
                 "vo2max": round(r["vo2max"], 2)}
                for r in _all(db.h, "SELECT t, utc_offset, vo2max FROM vo2max_samples WHERE kind = 'run-vo2-max' "
                                    "ORDER BY t")]

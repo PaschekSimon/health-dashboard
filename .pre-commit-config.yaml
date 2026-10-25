@@ -1,0 +1,7 @@
+# Runs ruff (settings in ruff.toml) on the Python files of every commit.
+# One-time setup:  uv tool install pre-commit  &&  pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff
