@@ -1,48 +1,50 @@
 """Open the health web app without any console window.
 
-Run with the backend venv's pythonw.exe (the "Health App" shortcut does this):
-starts the local API hidden in the background if it isn't running yet, then
-opens http://127.0.0.1:8765/ in the default browser. The API keeps running
-after this script ends; its output goes to Health\\data\\logs\\backend.log.
+    pythonw -m health_dashboard open [--no-browser]
+
+Starts the local API hidden in the background if it isn't running yet, then
+opens http://127.0.0.1:8765/ in the default browser (the "Health App" and
+"Health Backend" shortcuts on Windows run this with pythonw.exe). The API
+keeps running after this ends; its output goes to data/logs/backend.log.
 """
 
-import subprocess
-import sys
+import argparse
 import time
 import urllib.request
 import webbrowser
-from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-LOG = HERE.parent / "data" / "logs" / "backend.log"
+from . import procs
+from .config import child_env, get_paths
+
 PORT = 8765
-URL = f"http://127.0.0.1:{PORT}/"
 
 
-def api_up():
+def api_up(url):
     try:
-        with urllib.request.urlopen(URL + "status", timeout=3):
+        with urllib.request.urlopen(url + "status", timeout=3):
             return True
     except OSError:
         return False
 
 
-def main():
-    if not api_up():
-        # pythonw, not a detached python.exe: the venv launcher would hand a
-        # detached console child a new (visible) console window
-        python = HERE / ".venv" / "Scripts" / "pythonw.exe"
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-        with open(LOG, "ab") as log:
-            subprocess.Popen([str(python), "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", str(PORT)],
-                             cwd=HERE, creationflags=flags, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                             close_fds=True)
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--no-browser", action="store_true", help="only make sure the API runs")
+    ap.add_argument("--port", type=int, default=PORT)
+    args = ap.parse_args(argv)
+    url = f"http://127.0.0.1:{args.port}/"
+    if not api_up(url):
+        paths = get_paths()
+        paths.logs.mkdir(parents=True, exist_ok=True)
+        with open(paths.logs / "backend.log", "ab") as log:
+            procs.spawn(procs.module_cmd("health_dashboard", "serve", "--port", args.port, background=True),
+                        log=log, env=child_env(paths))
         for _ in range(40):
-            if api_up():
+            if api_up(url):
                 break
             time.sleep(0.5)
-    if "--no-browser" not in sys.argv:
-        webbrowser.open(URL)
+    if not args.no_browser:
+        webbrowser.open(url)
 
 
 if __name__ == "__main__":

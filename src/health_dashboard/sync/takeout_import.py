@@ -7,8 +7,8 @@ body responses), cardio load, per-minute skin temperature, breathing quality,
 running dynamics, total calories per minute, health assessments and personal
 records. This loads those into health.db as takeout_* tables:
 
-    python -I takeout_import.py                       # reads data/takeout
-    python -I takeout_import.py "path/to/Takeout/Google Health"
+    python -m health_dashboard takeout-import                     # reads data/takeout
+    python -m health_dashboard takeout-import "path/to/Takeout/Google Health"
 
 The export is read as data only. Rows are keyed by time (or date) and source,
 so importing a newer export again replaces rows instead of duplicating them.
@@ -17,6 +17,7 @@ beside them. The export gives most times in UTC without an offset, so the offset
 is taken from the nearest earlier heart-rate sample in hr_samples.
 """
 
+import argparse
 import bisect
 import csv
 import re
@@ -25,13 +26,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
-import user_settings
+from ..config import get_paths
+from ..settings import load_settings
 
-DATA = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DATA / "health.db"
-DEFAULT_ROOT = DATA / "takeout" / "Takeout" / "Google Health"
-WATCH_START = user_settings.WATCH_START.isoformat()
 PA = "Physical Activity_GoogleData"
 
 SCHEMA = """
@@ -147,17 +144,20 @@ def load(conn, table, ncols, row_iter):
     conn.executemany(sql, row_iter)
 
 
-def timed_series(root, folder, prefix, off, build):
-    """Rows from a per-timestamp CSV family, watch era only."""
+def timed_series(root, folder, prefix, off, since, build):
+    """Rows from a per-timestamp CSV family, watch era only (from `since`,
+    an ISO date)."""
     for f in files(root, folder, prefix):
         for r in rows(f):
-            if r["timestamp"][:10] < WATCH_START:
+            if r["timestamp"][:10] < since:
                 continue
             t = epoch(r["timestamp"])
             yield build(r, t, off(t))
 
 
-def import_all(conn, root: Path, off: Offsets):
+def import_all(conn, root: Path, off: Offsets, since: str):
+    """Load every type; `since` (ISO date, the first watch day) cuts the
+    per-timestamp series to the watch era."""
     hf = root / "Health Fitness Data_GoogleData"
 
     # Every night is scored twice, by sleep_session_v1 and v2 (the MCP's sleep
@@ -198,7 +198,7 @@ def import_all(conn, root: Path, off: Offsets):
         for f in files(root, "Stress Score") for r in rows(f)))
 
     load(conn, "takeout_eda_minute", 7, timed_series(
-        root, f"{PA}/Continuous Eda", "", off,
+        root, f"{PA}/Continuous Eda", "", off, since,
         lambda r, t, o: (t, o, num(r["eda level real micro siemens"]),
                          num(r["eda slope real micro siemens per minute"]),
                          num(r["scr detection count"], int), num(r["leads contact count"], int),
@@ -224,7 +224,7 @@ def import_all(conn, root: Path, off: Offsets):
     load(conn, "takeout_body_response_events", 8, body_responses())
 
     load(conn, "takeout_cardio_load_minute", 6, timed_series(
-        root, f"{PA}/Cardio Load", "", off,
+        root, f"{PA}/Cardio Load", "", off, since,
         lambda r, t, o: (t, o, num(r["workout"]), num(r["background"]), num(r["total"]),
                          r["data source"])))
 
@@ -240,11 +240,11 @@ def import_all(conn, root: Path, off: Offsets):
     load(conn, "takeout_daily_cardio_load", 5, ((d, *v) for d, v in daily_load.items()))
 
     load(conn, "takeout_skin_temp_minute", 4, timed_series(
-        root, f"{PA}/Body Temperature", "", off,
+        root, f"{PA}/Body Temperature", "", off, since,
         lambda r, t, o: (t, o, float(r["temperature celsius"]), r["data source"])))
 
     load(conn, "takeout_breathing_quality", 6, timed_series(
-        root, f"{PA}/Breathing Quality", "", off,
+        root, f"{PA}/Breathing Quality", "", off, since,
         lambda r, t, o: (t, o, num(r["oxygen desaturation probability"]), r["sleep state"],
                          r["signal quality"], r["data source"])))
 
@@ -277,7 +277,7 @@ def import_all(conn, root: Path, off: Offsets):
             for col, metric in cols.items() if num(r[col]) is not None))
 
     load(conn, "takeout_calories_minute", 4, timed_series(
-        root, f"{PA}/Calories", "", off,
+        root, f"{PA}/Calories", "", off, since,
         lambda r, t, o: (t, o, float(r["calories"]), r["data source"])))
 
     def assessments():
@@ -311,15 +311,21 @@ def report(conn):
         print(f"{n:34} {count:>8}  {lo} .. {hi}")
 
 
-def main() -> int:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_ROOT
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("root", nargs="?", type=Path,
+                    help="the export's Google Health folder (default: data/takeout/Takeout/Google Health)")
+    args = ap.parse_args(argv)
+    paths = get_paths()
+    root = args.root or paths.data / "takeout" / "Takeout" / "Google Health"
     if not root.is_dir():
         print(f"not found: {root}", file=sys.stderr)
         return 1
-    conn = sqlite3.connect(DB_PATH)
+    since = load_settings(paths).watch_start.isoformat()
+    conn = sqlite3.connect(paths.health_db)
     conn.executescript(SCHEMA)
     with conn:
-        import_all(conn, root, Offsets(conn))
+        import_all(conn, root, Offsets(conn), since)
     report(conn)
     conn.close()
     return 0

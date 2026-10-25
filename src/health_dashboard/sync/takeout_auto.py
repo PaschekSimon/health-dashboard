@@ -2,8 +2,8 @@
 
 Google Takeout cannot export monthly on its own (its schedule is every two
 months) and every download needs your passkey, so this does the rest around
-those two clicks. A Windows scheduled task ("Health Takeout") runs it every
-30 minutes and at logon:
+those two clicks. A scheduled task ("Health Takeout" on Windows; a systemd
+timer or cron elsewhere) runs it every 30 minutes and at logon:
 
   1. From the 1st of each month (09:00-22:00, once per month) it opens the
      Takeout page with only Google Health preselected. You click
@@ -12,15 +12,17 @@ those two clicks. A Windows scheduled task ("Health Takeout") runs it every
      confirm the passkey; the ZIP lands in Downloads.
   3. The next run finds the new takeout-*.zip, extracts only Takeout/Google
      Health into a fresh folder, runs takeout_import.py on it (idempotent),
-     swaps it in as data\\takeout, keeps the ZIP in data\\takeout_zips (only
+     swaps it in as data/takeout, keeps the ZIP in data/takeout_zips (only
      the newest one) and shows a toast with what came in.
 
 If no new export has arrived by the 4th, a toast reminds you once; clicking it
 opens the same page, which also shows the download button of a ready export.
-State lives in data\\.takeout_state.json, actions are logged to data\\logs\\takeout.log.
+Toasts are Windows only; elsewhere they go to the log (and notify-send, if
+installed). State lives in data/.takeout_state.json, actions are logged to
+data/logs/takeout.log.
 
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\pythonw.exe -I takeout_auto.py
-    ... python.exe -I takeout_auto.py --downloads DIR --no-remind   # testing
+    pythonw -m health_dashboard takeout-auto
+    python -m health_dashboard takeout-auto --downloads DIR --no-remind   # testing
 """
 
 import argparse
@@ -32,20 +34,16 @@ import shutil
 import subprocess
 import sys
 import time
+import webbrowser
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-DATA = HERE.parent / "data"
-STATE = DATA / ".takeout_state.json"
-LOG = DATA / "logs" / "takeout.log"
-LOCK = DATA / ".sync.lock"  # shared with sync_on_access.py and the backend jobs
-TAKEOUT = DATA / "takeout"
-INCOMING = DATA / "takeout_incoming"
-ZIPS = DATA / "takeout_zips"
+from .. import procs
+from ..config import get_paths
+
 DOWNLOADS = Path.home() / "Downloads"
-PYTHON = Path(sys.executable).with_name("python.exe")
 
 TAKEOUT_URL = "https://takeout.google.com/settings/takeout/custom/fitbit"
 PREFIX = "Takeout/Google Health/"
@@ -56,24 +54,49 @@ SETTLE = 5 * 60  # a ZIP untouched this long is a finished download
 STALE_LOCK = 30 * 60
 
 
-def log(msg: str) -> None:
-    with open(LOG, "a", encoding="utf-8") as fh:
+@dataclass(frozen=True)
+class Files:
+    """Where this script keeps things, all under the data folder."""
+    state: Path
+    log: Path
+    lock: Path       # .sync.lock, shared with sync-on-access and the backend jobs
+    takeout: Path
+    incoming: Path
+    zips: Path
+
+    @classmethod
+    def of(cls, paths):
+        d = paths.data
+        return cls(state=d / ".takeout_state.json", log=paths.logs / "takeout.log", lock=paths.sync_lock,
+                   takeout=d / "takeout", incoming=d / "takeout_incoming", zips=d / "takeout_zips")
+
+
+def log(f: Files, msg: str) -> None:
+    f.log.parent.mkdir(parents=True, exist_ok=True)
+    with open(f.log, "a", encoding="utf-8") as fh:
         fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
 
 
-def load_state() -> dict:
+def load_state(f: Files) -> dict:
     try:
-        return json.loads(STATE.read_text(encoding="utf-8"))
+        return json.loads(f.state.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
 
 
-def save_state(state: dict) -> None:
-    STATE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+def save_state(f: Files, state: dict) -> None:
+    f.state.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
-def toast(title: str, text: str, url: str | None = None) -> None:
-    """Windows toast through PowerShell's WinRT bridge; a click opens url."""
+def toast(f: Files, title: str, text: str, url: str | None = None) -> None:
+    """Windows toast through PowerShell's WinRT bridge; a click opens url.
+    Elsewhere: a log line, and notify-send if it's installed."""
+    if not procs.WINDOWS:
+        log(f, f"notice: {title}: {text}")
+        if shutil.which("notify-send"):
+            subprocess.run(["notify-send", title, text + (f" {url}" if url else "")], timeout=60, check=False)
+        return
+
     def esc(s):
         return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace('"', "&quot;").replace("'", "''"))
@@ -89,7 +112,7 @@ def toast(title: str, text: str, url: str | None = None) -> None:
         ".Show([Windows.UI.Notifications.ToastNotification]::new($x))")
     encoded = base64.b64encode(ps.encode("utf-16-le")).decode()
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-                   creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
+                   timeout=60, **procs.hidden())
 
 
 def month_start() -> str:
@@ -97,24 +120,24 @@ def month_start() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m01T000000Z")
 
 
-def remind(state: dict) -> None:
+def remind(f: Files, state: dict) -> None:
     now = datetime.now()
     month = now.strftime("%Y-%m")
     if state.get("last_stamp", "") >= month_start():
         return  # this month's export is already in
     if state.get("opened_month") != month and now.hour in REMIND_HOURS:
-        os.startfile(TAKEOUT_URL)
+        webbrowser.open(TAKEOUT_URL)
         state["opened_month"] = month
-        save_state(state)
-        log("opened the Takeout page for this month's export")
+        save_state(f, state)
+        log(f, "opened the Takeout page for this month's export")
     elif (state.get("opened_month") == month and state.get("nudged_month") != month
           and now.day >= NUDGE_DAY and now.hour in REMIND_HOURS):
-        toast("Health export missing",
+        toast(f, "Health export missing",
               "No new Google Health export yet. Click to request it, or download the "
               "ready one on this PC.", TAKEOUT_URL)
         state["nudged_month"] = month
-        save_state(state)
-        log("reminded about the missing export")
+        save_state(f, state)
+        log(f, "reminded about the missing export")
 
 
 def new_exports(downloads: Path, state: dict) -> dict[str, list[Path]]:
@@ -136,15 +159,15 @@ def new_exports(downloads: Path, state: dict) -> dict[str, list[Path]]:
     return groups
 
 
-def take_lock() -> bool:
+def take_lock(f: Files) -> bool:
     try:
-        if time.time() - LOCK.stat().st_mtime < STALE_LOCK:
+        if time.time() - f.lock.stat().st_mtime < STALE_LOCK:
             return False
-        LOCK.unlink(missing_ok=True)
+        f.lock.unlink(missing_ok=True)
     except FileNotFoundError:
         pass
     try:
-        os.close(os.open(LOCK, os.O_CREAT | os.O_EXCL))
+        os.close(os.open(f.lock, os.O_CREAT | os.O_EXCL))
         return True
     except FileExistsError:
         return False
@@ -170,80 +193,80 @@ def extract(parts: list[Path], dest: Path) -> int:
     return count
 
 
-def run_import(folder: Path) -> tuple[int, str]:
+def run_import(f: Files, folder: Path) -> tuple[int, str]:
     """takeout_import.py in a child, keeping .sync.lock fresh while it runs."""
-    with open(LOG, "a", encoding="utf-8") as fh:
-        proc = subprocess.Popen([str(PYTHON), "-I", str(HERE / "takeout_import.py"), str(folder)],
-                                cwd=HERE, stdout=subprocess.PIPE, stderr=fh, text=True,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
+    with open(f.log, "a", encoding="utf-8") as fh:
+        proc = subprocess.Popen(procs.module_cmd("health_dashboard", "takeout-import", folder),
+                                stdout=subprocess.PIPE, stderr=fh, text=True, **procs.hidden())
         while proc.poll() is None:
-            os.utime(LOCK)
+            os.utime(f.lock)
             time.sleep(30)
         out = proc.stdout.read()
         fh.write(out)
     return proc.returncode, out
 
 
-def import_export(stamp: str, parts: list[Path], state: dict) -> None:
-    log(f"found export {stamp}: {', '.join(p.name for p in parts)}")
-    shutil.rmtree(INCOMING, ignore_errors=True)
-    INCOMING.mkdir()
+def import_export(f: Files, stamp: str, parts: list[Path], state: dict) -> None:
+    log(f, f"found export {stamp}: {', '.join(p.name for p in parts)}")
+    shutil.rmtree(f.incoming, ignore_errors=True)
+    f.incoming.mkdir()
     try:
-        n = extract(parts, INCOMING)
+        n = extract(parts, f.incoming)
         if not n:
-            log("no Google Health folder in it, skipped")
-            toast("Health export skipped", f"takeout-{stamp} has no Google Health data.")
+            log(f, "no Google Health folder in it, skipped")
+            toast(f, "Health export skipped", f"takeout-{stamp} has no Google Health data.")
             state["last_stamp"] = stamp
-            save_state(state)
+            save_state(f, state)
             return
-        code, out = run_import(INCOMING / PREFIX)
+        code, out = run_import(f, f.incoming / PREFIX)
         if code:
             raise RuntimeError(f"takeout_import.py exit {code}")
     except Exception as exc:  # leave the ZIP in Downloads, retry on the next run
-        log(f"import failed: {exc!r}")
+        log(f, f"import failed: {exc!r}")
         if state.get("failed_stamp") != stamp:  # one toast per export, not per retry
-            toast("Health export import failed", f"{exc}. Details in Health\\data\\logs\\takeout.log.")
+            toast(f, "Health export import failed", f"{exc}. Details in data/logs/takeout.log.")
             state["failed_stamp"] = stamp
-            save_state(state)
-        shutil.rmtree(INCOMING, ignore_errors=True)
+            save_state(f, state)
+        shutil.rmtree(f.incoming, ignore_errors=True)
         return
 
     # The new export holds the full history, so it replaces the previous copy.
-    shutil.rmtree(TAKEOUT, ignore_errors=True)
-    INCOMING.rename(TAKEOUT)
-    ZIPS.mkdir(exist_ok=True)
-    for old in ZIPS.glob("takeout-*.zip"):
+    shutil.rmtree(f.takeout, ignore_errors=True)
+    f.incoming.rename(f.takeout)
+    f.zips.mkdir(exist_ok=True)
+    for old in f.zips.glob("takeout-*.zip"):
         old.unlink()
     for p in parts:
-        shutil.move(p, ZIPS / p.name)
+        shutil.move(p, f.zips / p.name)
     state["last_stamp"] = stamp
     state["last_import"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    save_state(state)
+    save_state(f, state)
     readiness = re.search(r"takeout_daily_readiness\s+\d+\s+\S+ \.\. (\S+)", out)
     through = f" through {readiness[1]}" if readiness else ""
-    log(f"imported export {stamp}{through}")
-    toast("Health export imported", f"Google Health Takeout from {stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} "
+    log(f, f"imported export {stamp}{through}")
+    toast(f, "Health export imported", f"Google Health Takeout from {stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} "
           f"is in health.db{through}.")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--downloads", type=Path, default=DOWNLOADS)
     ap.add_argument("--no-remind", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    state = load_state()
+    f = Files.of(get_paths())
+    state = load_state(f)
     exports = new_exports(args.downloads, state)
     if exports:
-        if not take_lock():
+        if not take_lock(f):
             return 0  # a sync is running; the next run picks the ZIP up
         try:
             for stamp in sorted(exports):
-                import_export(stamp, exports[stamp], state)
+                import_export(f, stamp, exports[stamp], state)
         finally:
-            LOCK.unlink(missing_ok=True)
+            f.lock.unlink(missing_ok=True)
     if not args.no_remind:
-        remind(state)
+        remind(f, state)
     return 0
 
 

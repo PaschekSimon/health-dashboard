@@ -3,29 +3,22 @@
 Reads the same numbers as the local API (scores, sleep, runs, annotations) and
 lets Claude record context (illness, alcohol, travel, ...) as annotations.
 
-    backend\\.venv\\Scripts\\python.exe backend\\mcp_server.py
+    health mcp              (= python -m health_dashboard.mcp_server)
+
+Data paths come from the environment (config.get_paths).
 """
 
-import sys
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:  # mcp 2.x renamed FastMCP to MCPServer; same decorator API
     from mcp.server.mcpserver import MCPServer as FastMCP
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
-from health_core import annotations as ann
-from health_core import jobs, queries
+from .core import annotations as ann
+from .core import jobs, queries
 
 mcp = FastMCP("health-app")
-
-_conn = ann.connect()
-ann.ensure_schema(_conn)
-_conn.close()
-jobs.connect().close()
 
 
 def _recompute_if(changed):
@@ -187,5 +180,13 @@ def _wait(run, seconds):
     return run
 
 
-if __name__ == "__main__":
+def main(argv=None):
+    conn = ann.connect()
+    ann.ensure_schema(conn)
+    conn.close()
+    jobs.connect().close()
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

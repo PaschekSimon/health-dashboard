@@ -1,30 +1,76 @@
-"""Where things live. The backend sits in Health/backend, the analysis
-scripts in Health/scripts, and all data (health.db, logs, the sync lock) in
-Health/data."""
+"""Where things live. Nothing here is read at import time: call `get_paths()`
+(it reads the environment each time) or build a `Paths` yourself, e.g. in
+tests.
+
+Defaults fit a checkout of the repo: data in <repo>/data, the web app in
+<repo>/frontend. Environment variables override them:
+
+    HEALTH_DATA_DIR             health.db, logs, settings.json, scores_config.json,
+                                Takeout files and the sync lock
+    GOOGLE_HEALTH_MCP_DB_PATH   the google-health MCP's cache (same variable the
+                                MCP itself reads); default
+                                ~/.local/share/google-health-mcp/google_health.db
+    HEALTH_FRONTEND_DIR         the static web app served at /app/
+"""
 
 import os
-import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-BACKEND = Path(__file__).resolve().parent.parent
-HEALTH = BACKEND.parent
-SCRIPTS = HEALTH / "scripts"
-DATA = HEALTH / "data"
-LOGS = DATA / "logs"
-HEALTH_DB = DATA / "health.db"
-MCP_DB = Path(os.path.expanduser("~/.local/share/google-health-mcp/google_health.db"))
+REPO = Path(__file__).resolve().parents[2]  # src/health_dashboard -> repo root
+DEFAULT_MCP_DB = Path("~/.local/share/google-health-mcp/google_health.db")
 
-# The google-health MCP's venv: it holds the Google login, so health_sync.py
-# and the analysis scripts run with its Python (never install anything there).
-MCP_SCRIPTS = Path(os.environ["APPDATA"]) / "uv" / "tools" / "google-health-mcp" / "Scripts"
-MCP_PYTHON = MCP_SCRIPTS / "python.exe"
-MCP_CLI = MCP_SCRIPTS / "google-health-mcp.exe"
 
-# Shared with sync_on_access.py (SessionStart hook + MCP auto-sync).
-SYNC_LOCK = DATA / ".sync.lock"
-LAST_SYNC = DATA / ".last_sync"
-SYNC_LOG = LOGS / "sync.log"
+@dataclass(frozen=True)
+class Paths:
+    data: Path
+    mcp_db: Path
+    frontend: Path = REPO / "frontend"
 
-# annotation_effects.py lives next to baseline.py, which imports it too.
-if str(SCRIPTS) not in sys.path:
-    sys.path.append(str(SCRIPTS))
+    @property
+    def health_db(self) -> Path:
+        return self.data / "health.db"
+
+    @property
+    def logs(self) -> Path:
+        return self.data / "logs"
+
+    @property
+    def settings(self) -> Path:
+        """Per-user settings (watch name, first day), see settings.py."""
+        return self.data / "settings.json"
+
+    @property
+    def scores_config(self) -> Path:
+        """Frozen score calibration (Strain k, Recovery weights)."""
+        return self.data / "scores_config.json"
+
+    # Shared by every sync: the backend jobs, sync-on-access and the Takeout import.
+    @property
+    def sync_lock(self) -> Path:
+        return self.data / ".sync.lock"
+
+    @property
+    def last_sync(self) -> Path:
+        return self.data / ".last_sync"
+
+    @property
+    def sync_log(self) -> Path:
+        return self.logs / "sync.log"
+
+
+def get_paths() -> Paths:
+    env = os.environ.get
+    return Paths(
+        data=Path(env("HEALTH_DATA_DIR") or REPO / "data").expanduser(),
+        mcp_db=Path(env("GOOGLE_HEALTH_MCP_DB_PATH") or DEFAULT_MCP_DB).expanduser(),
+        frontend=Path(env("HEALTH_FRONTEND_DIR") or REPO / "frontend").expanduser(),
+    )
+
+
+def child_env(paths: Paths) -> dict:
+    """Environment for a child process that must see the same data as us."""
+    env = dict(os.environ)
+    env.update(HEALTH_DATA_DIR=str(paths.data), GOOGLE_HEALTH_MCP_DB_PATH=str(paths.mcp_db),
+               HEALTH_FRONTEND_DIR=str(paths.frontend))
+    return env

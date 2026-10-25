@@ -2,7 +2,7 @@
 which nights a piece of context removes from the baselines.
 
 Annotations (table `annotations` in health.db, written by the backend in
-backend\\health_core\\annotations.py) carry context the watch doesn't have:
+core/annotations.py) carry context the watch doesn't have:
 illness, alcohol, travel, ... Only *confirmed* ones count here.
 
 Nights are keyed by the local wake date, like everywhere else in the analysis
@@ -11,12 +11,10 @@ Nights are keyed by the local wake date, like everywhere else in the analysis
 To make a new kind change the numbers, add one entry to EFFECTS:
     "travel": Effect(excludes="nights_in_range", group="illness"),
 Kinds that aren't listed are stored and shown, but exclude nothing.
-
-Pure standard library: baseline.py imports this under the MCP's Python.
 """
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -30,8 +28,8 @@ class Effect:
     # "night": one night, the one after the evening of `start` (or the
     #          `night:` target if given).
     excludes: str
-    # which exclusion set the nights go into: "illness" -> baseline.ILLNESS_PERIODS
-    # (also drops days from Healthspan), "alcohol" -> baseline.ALCOHOL_NIGHTS
+    # which exclusion set the nights go into: "illness" -> Exclusions.illness
+    # (also drops days from Healthspan), "alcohol" -> Exclusions.alcohol
     # (also the "after alcohol" condition in weekly_summary). Both are
     # left out of every baseline.
     group: str
@@ -71,22 +69,37 @@ def affects_scores(kind):
     return kind in EFFECTS
 
 
+@dataclass
+class Exclusions:
+    """Illness periods and alcohol nights, left out of every baseline."""
+    illness: list = field(default_factory=list)   # [(first night, last night)]
+    alcohol: set = field(default_factory=set)     # {night}
+
+    def is_ill(self, d):
+        """True if d falls in a confirmed illness period."""
+        return any(a <= d <= b for a, b in self.illness)
+
+    def is_excluded(self, night):
+        """True for illness and alcohol nights."""
+        return self.is_ill(night) or night in self.alcohol
+
+
 def load_exclusions(db_path):
-    """{"illness": [(d0, d1), ...], "alcohol": {night, ...}} from confirmed
-    annotations, or None if the table doesn't exist (caller falls back)."""
+    """Exclusions from the confirmed annotations in health.db; empty if the
+    database or the table doesn't exist yet."""
+    out = Exclusions()
     try:
         conn = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error:
-        return None
+        return out
     try:
         rows = conn.execute(
             "SELECT kind, start, \"end\", target FROM annotations WHERE status = 'confirmed' "
             "ORDER BY start, id").fetchall()
     except sqlite3.Error:
-        return None
+        return out
     finally:
         conn.close()
-    out = {"illness": [], "alcohol": set()}
     for kind, start, end, target in rows:
         span = nights_of(kind, start, end, target)
         if span is None:
@@ -95,8 +108,8 @@ def load_exclusions(db_path):
         if group == "alcohol":
             d = span[0]
             while d <= span[1]:
-                out["alcohol"].add(d)
+                out.alcohol.add(d)
                 d += timedelta(days=1)
         else:
-            out["illness"].append(span)
+            out.illness.append(span)
     return out

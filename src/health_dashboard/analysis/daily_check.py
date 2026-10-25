@@ -13,17 +13,15 @@ For every night (keyed by wake date) it computes
 
 Results replace the table analysis_daily in health.db; the last 7 nights are
 printed. Run:
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\python.exe -I daily_check.py [--days N]
+    python -m health_dashboard daily-check [--days N]
 """
 
 import argparse
 import statistics
-import sys
 from datetime import timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-import baseline as bl
+from ..context import Context
+from . import baseline as bl
 
 FLAG_SIGNALS = ["rhr", "ln_rmssd", "nrem_hr", "breathing", "skin_temp"]
 LABELS = {"rhr": "RHR", "ln_rmssd": "HRV", "nrem_hr": "nREM", "breathing": "BR",
@@ -38,7 +36,7 @@ def flag_for(z):
     return "OK"
 
 
-def hrv_trend(nights, night):
+def hrv_trend(ctx, nights, night):
     """(rolling 7-night mean, band low, band high, CV %) of ln RMSSD."""
     week = [nights[d]["ln_rmssd"] for d in (night - timedelta(days=i) for i in range(7))
             if d in nights and "ln_rmssd" in nights[d]]
@@ -47,7 +45,7 @@ def hrv_trend(nights, night):
 
     history = []
     for d in sorted(nights, reverse=True):
-        if d >= night or d < bl.ANALYSIS_START or bl.is_excluded(d) or "ln_rmssd" not in nights[d]:
+        if d >= night or d < ctx.analysis_start or ctx.is_excluded(d) or "ln_rmssd" not in nights[d]:
             continue
         history.append(nights[d]["ln_rmssd"])
         if len(history) == HRV_BAND_MAX:
@@ -59,17 +57,17 @@ def hrv_trend(nights, night):
     return mean7, lo, hi, cv7
 
 
-def run():
-    health, mcp = bl.connect()
-    nights = bl.nightly_metrics(health, mcp)
+def run(ctx):
+    health = ctx.health
+    nights = bl.nightly_metrics(ctx)
     rows = []
     prev_flag = None
     for night in nights:
-        if night < bl.ANALYSIS_START:
+        if night < ctx.analysis_start:
             continue
         z, n_base = {}, 0
         for key in bl.SIGNALS:
-            z[key], _, n = bl.robust_z(nights, night, key)
+            z[key], _, n = bl.robust_z(ctx, nights, night, key)
             n_base = max(n_base, n)
         flag = flag_for(z)
         if flag == "AMBER" and prev_flag in ("AMBER", "RED"):
@@ -77,13 +75,13 @@ def run():
         if all(z[k] is None for k in FLAG_SIGNALS):
             flag = None  # no baseline yet
         prev_flag = flag
-        mean7, lo, hi, cv7 = hrv_trend(nights, night)
+        mean7, lo, hi, cv7 = hrv_trend(ctx, nights, night)
         status = None
         if mean7 is not None and lo is not None:
             status = "below" if mean7 < lo else "above" if mean7 > hi else "within"
         rows.append({"night": night.isoformat(), **{f"z_{k}": z[k] for k in bl.SIGNALS},
                      "flag": flag, "baseline_n": n_base, "provisional": int(n_base < bl.BASELINE_MIN_NIGHTS),
-                     "excluded_event": int(bl.is_excluded(night)),
+                     "excluded_event": int(ctx.is_excluded(night)),
                      "hrv_ln": nights[night].get("ln_rmssd"), "hrv7_mean": mean7, "hrv_band_lo": lo,
                      "hrv_band_hi": hi, "hrv_status": status, "hrv7_cv": cv7})
 
@@ -113,13 +111,18 @@ def print_rows(rows):
               f"  {fmt(r['hrv7_cv'], '4.1f')}  {r['baseline_n']:>3}{note}")
 
 
-if __name__ == "__main__":
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days", type=int, default=7, help="how many recent nights to print (default 7)")
     ap.add_argument("--from", dest="start", help="print from this wake date instead, e.g. 2026-09-25")
-    args = ap.parse_args()
-    rows = run()
+    args = ap.parse_args(argv)
+    with Context.open() as ctx:
+        rows = run(ctx)
     shown = [r for r in rows if r["night"] >= args.start] if args.start else rows[-args.days:]
     print("z-scores: positive = worse than your baseline. AMBER: one signal > 2 or two > 1.5; "
           "RED: AMBER two nights running.")
     print_rows(shown)
+
+
+if __name__ == "__main__":
+    main()

@@ -11,11 +11,10 @@ import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
+from ..config import get_paths
+from ..settings import load_settings
 from . import annotations as ann
-from . import jobs, paths
-import user_settings  # Health/scripts, on sys.path via paths
-
-WATCH = user_settings.WATCH
+from . import jobs
 
 # Strain target by Recovery band. Direction from HRV-guided training studies
 # (Kiviniemi 2007, Vesterinen 2016, Javaloyes 2019: hard when recovered, low
@@ -35,12 +34,15 @@ def _ro(path):
 
 class Db:
     """Read-only connections to both databases, plus a writable one for
-    annotations (which uses its own)."""
+    annotations (which uses its own), and the settings queries need (paths,
+    watch name). Paths default to the environment (config.get_paths)."""
 
-    def __init__(self):
-        self.h = _ro(paths.HEALTH_DB)
-        self.m = _ro(paths.MCP_DB)
-        self.a = ann.connect()
+    def __init__(self, paths=None):
+        self.paths = paths or get_paths()
+        self.watch = load_settings(self.paths).watch
+        self.h = _ro(self.paths.health_db)
+        self.m = _ro(self.paths.mcp_db)
+        self.a = ann.connect(self.paths.health_db)
 
     def close(self):
         for c in (self.h, self.m, self.a):
@@ -129,17 +131,18 @@ def status(db):
         r = _one(db.m, f"SELECT max(date) v FROM {table}")
         newest_mcp[table] = r["v"] if r else None
     sync_state = {r["data_type"]: r["synced_through"] for r in _all(db.h, "SELECT * FROM sync_state")}
-    jc = jobs.connect()
+    jc = jobs.connect(db.paths)
     try:
         last = jobs.last_successful_sync(jc)
-        runs = jobs.recent_runs(jc, 5)
+        runs = jobs.recent_runs(jc, 5, db.paths)
     finally:
         jc.close()
+    intraday = jobs.last_intraday_sync(db.paths)
     return {
         "now": datetime.now().isoformat(timespec="seconds"),
-        "sync_running": jobs.lock_held(),
+        "sync_running": jobs.lock_held(db.paths),
         "last_successful_sync": last.isoformat(timespec="seconds") if last else None,
-        "last_intraday_sync": (lambda t: t.isoformat(timespec="seconds") if t else None)(jobs.last_intraday_sync()),
+        "last_intraday_sync": intraday.isoformat(timespec="seconds") if intraday else None,
         "recent_runs": [{k: r[k] for k in ("id", "reason", "status", "started", "finished", "error", "origin")}
                         for r in runs],
         "newest_data": {"health_db": newest_health, "mcp_cache": newest_mcp},
@@ -282,7 +285,7 @@ def dashboard(db, day=None):
     act = _one(db.m, "SELECT steps, distance_km, active_minutes FROM activity WHERE date = ?", (ds,))
     # watch steps from the intraday table: fresher than the MCP's daily value
     watch_steps = _one(db.h, "SELECT sum(steps) n FROM steps_minute WHERE source = ? AND "
-                             "date(t_start + coalesce(utc_offset, 0), 'unixepoch') = ?", (WATCH, ds))
+                             "date(t_start + coalesce(utc_offset, 0), 'unixepoch') = ?", (db.watch, ds))
     monday = d - timedelta(days=d.weekday())
     week_runs = _all(db.h, "SELECT log_id, date, km, minutes, trimp, avg_hr FROM analysis_workouts "
                            "WHERE type='RUNNING' AND date BETWEEN ? AND ? ORDER BY date",
@@ -374,16 +377,16 @@ def trend(db, metric, date_from=None, date_to=None):
 
 # ------------------------------------------------------- explain score ----
 
-def _config():
+def _config(db):
     try:
-        return json.loads((paths.DATA / "scores_config.json").read_text(encoding="utf-8"))
+        return json.loads(db.paths.scores_config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
 def explain_score(db, day, score):
     ds = _d(day).isoformat()
-    cfg = _config()
+    cfg = _config(db)
     anns = [a for a in ann.list_(db.a, ds, ds) if a["status"] != "rejected"]
     if score == "recovery":
         r = _one(db.h, "SELECT * FROM score_recovery_daily WHERE date = ?", (ds,))

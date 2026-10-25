@@ -19,18 +19,16 @@ Speed and distance come from the per-second running samples of the Takeout
 (takeout_run_samples), else from the GPS track (TCX distance, scaled to the
 workout's total); runs with neither fall back to whole-run distance.
 Results replace the table analysis_workouts in health.db. Run:
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\python.exe -I run_report.py
+    python -m health_dashboard run-report
 """
 
 import bisect
 import json
 import statistics
-import sys
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-import baseline as bl
+from ..context import Context
+from . import baseline as bl
 
 WARMUP_S = 300
 STEADY_SPLIT_CV = 8.0       # % coefficient of variation of km split paces
@@ -73,19 +71,19 @@ def durations(samples, end):
     return out
 
 
-def distance_track(health, mcp, w, t0, t1):
+def distance_track(ctx, w, t0, t1):
     """[(t, metres so far)] for a run: the Takeout's per-second distance, else
     the TCX track's distance scaled to the workout total (raw GPS runs a few
     % short). Empty if neither exists."""
-    samples = health.execute("SELECT t, value/1000.0 FROM takeout_run_samples WHERE metric='pace_distance_mm' "
-                             "AND source=? AND t BETWEEN ? AND ? ORDER BY t", (bl.WATCH, t0, t1)).fetchall()
+    samples = ctx.health.execute("SELECT t, value/1000.0 FROM takeout_run_samples WHERE metric='pace_distance_mm' "
+                                 "AND source=? AND t BETWEEN ? AND ? ORDER BY t", (ctx.watch, t0, t1)).fetchall()
     if samples:
         out, total = [(samples[0][0] - 1, 0.0)], 0.0
         for t, metres in samples:
             total += metres
             out.append((t, total))
         return out
-    row = mcp.execute("SELECT tcx FROM exercise_routes WHERE log_id = ?", (w["log_id"],)).fetchone()
+    row = ctx.mcp.execute("SELECT tcx FROM exercise_routes WHERE log_id = ?", (w["log_id"],)).fetchone()
     if not row or not row[0]:
         return []
     try:
@@ -137,12 +135,12 @@ def ef(track, hr, t0, t1, pauses):
     return (metres / ((t1 - t0 - paused) / 60)) / (beats / secs)
 
 
-def split_cv(health, w, t0, t1):
+def split_cv(ctx, w, t0, t1):
     """CV (%) of the km split paces. Splits are rebuilt from the per-second
     distance samples when they exist, else taken from the workout's splits
     (some runs have none)."""
-    samples = health.execute("SELECT t, value/1000.0 FROM takeout_run_samples WHERE metric='pace_distance_mm' "
-                             "AND source=? AND t BETWEEN ? AND ? ORDER BY t", (bl.WATCH, t0, t1)).fetchall()
+    samples = ctx.health.execute("SELECT t, value/1000.0 FROM takeout_run_samples WHERE metric='pace_distance_mm' "
+                                 "AND source=? AND t BETWEEN ? AND ? ORDER BY t", (ctx.watch, t0, t1)).fetchall()
     if samples:
         paces, dist, mark_t, mark_d = [], 0.0, t0, 0.0
         for t, metres in samples:
@@ -160,16 +158,16 @@ def split_cv(health, w, t0, t1):
     return 100 * statistics.stdev(paces) / statistics.mean(paces)
 
 
-def hr_at(health, t):
-    row = health.execute("SELECT bpm, abs(t-?) d FROM hr_samples WHERE source=? AND t BETWEEN ? AND ? "
-                         "ORDER BY d LIMIT 1", (t, bl.WATCH, t - 5, t + 5)).fetchone()
+def hr_at(ctx, t):
+    row = ctx.health.execute("SELECT bpm, abs(t-?) d FROM hr_samples WHERE source=? AND t BETWEEN ? AND ? "
+                             "ORDER BY d LIMIT 1", (t, ctx.watch, t - 5, t + 5)).fetchone()
     return row[0] if row else None
 
 
-def analyse_run(health, mcp, w, row):
+def analyse_run(ctx, w, row):
     t0, t1, pauses = run_window(w)
-    zones = bl.hr_zones(health, w["day"])
-    hr = durations(bl.hr_series(health, t0, t1), t1)
+    zones = bl.hr_zones(ctx.health, w["day"])
+    hr = durations(bl.hr_series(ctx, t0, t1), t1)
     hr = [(t, b, d) for t, b, d in hr if moving(t, pauses)]
     total = sum(d for _, _, d in hr) or 1
     for z in ("LIGHT", "MODERATE", "VIGOROUS", "PEAK"):
@@ -179,13 +177,13 @@ def analyse_run(health, mcp, w, row):
     row["pct_below_vigorous"] = 100 * sum(d for _, b, d in hr if b < zones["VIGOROUS"][0]) / total
     row["avg_hr"] = sum(b * d for _, b, d in hr) / total
 
-    track = distance_track(health, mcp, w, t0, t1)
+    track = distance_track(ctx, w, t0, t1)
     has_samples = bool(track)
     ms = json.loads(w["metrics_summary"] or "{}")
     km = (w["distance_km"] or 0)
     row["climb_m_per_km"] = ms.get("elevationGainMillimeters", 0) / 1000 / km if km else None
     row["stop_s"] = sum(b - a for a, b in pauses if b - a >= MAX_STOP_S)
-    row["split_cv"] = split_cv(health, w, t0, t1)
+    row["split_cv"] = split_cv(ctx, w, t0, t1)
     custom = "Benutzerdef" in (w["name"] or "")
     steady = row["split_cv"] is not None and row["split_cv"] <= STEADY_SPLIT_CV and not custom \
         and row["stop_s"] <= MAX_STOPS_TOTAL_S
@@ -198,7 +196,7 @@ def analyse_run(health, mcp, w, row):
     if row["split_cv"] and row["split_cv"] > STEADY_SPLIT_CV:
         notes.append(f"uneven pace (CV {row['split_cv']:.0f} %)")
 
-    hr_all = durations(bl.hr_series(health, t0, t1), t1)
+    hr_all = durations(bl.hr_series(ctx, t0, t1), t1)
     if steady and has_samples:
         row["ef"] = ef(track, hr_all, t0, t1, pauses)
     elif steady:
@@ -213,7 +211,7 @@ def analyse_run(health, mcp, w, row):
     elif steady and row["climb_m_per_km"] is not None and row["climb_m_per_km"] >= MAX_CLIMB_PER_KM:
         notes.append(f"hilly ({row['climb_m_per_km']:.0f} m/km), no decoupling")
 
-    h0, h60, h120 = hr_at(health, t1), hr_at(health, t1 + 60), hr_at(health, t1 + 120)
+    h0, h60, h120 = hr_at(ctx, t1), hr_at(ctx, t1 + 60), hr_at(ctx, t1 + 120)
     row["hr_end"] = h0
     row["hrr60"] = h0 - h60 if h0 and h60 else None
     row["hrr120"] = h0 - h120 if h0 and h120 else None
@@ -223,25 +221,25 @@ def analyse_run(health, mcp, w, row):
     row["notes"] = "; ".join(notes)
 
 
-def run():
-    health, mcp = bl.connect()
+def run(ctx):
+    health, mcp = ctx.health, ctx.mcp
     hr_max = bl.current_max_hr(health)
     rows = []
-    for w in bl.watch_workouts(mcp):
+    for w in bl.watch_workouts(ctx):
         t0, t1, _ = run_window(w)
         local_end = (t1 + w["offset"]) % 86400 / 3600
         row = {"log_id": w["log_id"], "date": w["date"], "type": w["log_type"], "name": w["name"],
                "minutes": (t1 - t0) / 60, "km": w["distance_km"], "end_local_h": local_end,
                "rest_hr": bl.resting_hr_for(mcp, w["day"]), "max_hr": hr_max,
-               "trimp": bl.banister_trimp(bl.hr_series(health, t0, t1), bl.resting_hr_for(mcp, w["day"]), hr_max)}
+               "trimp": bl.banister_trimp(bl.hr_series(ctx, t0, t1), bl.resting_hr_for(mcp, w["day"]), hr_max)}
         for k in ("min_light", "min_moderate", "min_vigorous", "min_peak", "first_boundary", "pct_below_first",
                   "pct_below_vigorous", "avg_hr", "climb_m_per_km", "stop_s", "split_cv", "steady", "ef",
                   "decoupling_pct", "hr_end", "hrr60", "hrr120", "hrr_reliable", "notes"):
             row[k] = None
         if w["log_type"] == "RUNNING":
-            analyse_run(health, mcp, w, row)
+            analyse_run(ctx, w, row)
         else:
-            hr = durations(bl.hr_series(health, t0, t1), t1)
+            hr = durations(bl.hr_series(ctx, t0, t1), t1)
             total = sum(d for _, _, d in hr) or 1
             row["avg_hr"] = sum(b * d for _, b, d in hr) / total
         rows.append(row)
@@ -259,8 +257,9 @@ def f(v, spec):
     return format(v, spec) if v is not None else "-"
 
 
-if __name__ == "__main__":
-    rows, hr_max = run()
+def main(argv=None):
+    with Context.open() as ctx:
+        rows, hr_max = run(ctx)
     runs = [r for r in rows if r["type"] == "RUNNING"]
     print(f"Max HR {hr_max} (from Google's zones). Zone minutes: L=light M=moderate V=vigorous P=peak.")
     print(f"{'date':10} {'km':>4} {'min':>4} {'avgHR':>5} {'L':>4} {'M':>4} {'V':>4} {'P':>4} "
@@ -277,3 +276,7 @@ if __name__ == "__main__":
         h = r["end_local_h"]
         print(f"{r['date']:10} {r['type']:18} {r['minutes']:4.0f} {f(r['avg_hr'], '5.0f'):>5} {r['trimp']:6.0f}"
               f"  {int(h):02d}:{int(h % 1 * 60):02d}")
+
+
+if __name__ == "__main__":
+    main()

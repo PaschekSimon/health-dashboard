@@ -9,22 +9,19 @@ Variants: "all" (all available data, WHOOP uses 6 months), "excl_illness"
 (illness annotations dropped) and "last30" (last 30 days). Pace of Aging =
 (0.5 + (age_last30 - age_all)) / 0.5, clamped to -1.0x .. 3.0x.
 
-    python -I healthspan.py
+    python -m health_dashboard healthspan
 Writes score_healthspan in health.db (one row per run date, variant and metric).
 """
 
 import math
 import statistics
-import sys
 from datetime import date, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
-import baseline as bl
-import scores_common as sc
-from recovery import asleep_set, sri
+from ..analysis import baseline as bl
+from ..context import Context
+from . import common as sc
+from .recovery import asleep_set, sri
 
-START = bl.ANALYSIS_START       # first full watch days skipped
 OVERLAP = 0.7
 YEARS_PER_VO2 = 10 * math.log(0.87) / 3.5     # Kodama 2009: HR 0.87 per MET
 YEARS_PER_BPM = 10 * math.log(1.09) / 10      # Zhang 2016: HR 1.09 per +10 bpm
@@ -83,10 +80,12 @@ UNITS = {"vo2max": "ml/kg/min", "rhr": "bpm", "steps": "steps/day", "moderate": 
          "vigorous": "min/week", "strength": "min/week", "sleep_h": "h/night", "sri": "-100..100"}
 
 
-def inputs(health, mcp, d0, d1, drop_illness):
+def inputs(ctx, d0, d1, drop_illness):
     """Metric averages over local days d0..d1 (nights d0+1..d1+1)."""
+    health, mcp = ctx.health, ctx.mcp
+
     def keep(d):
-        return d0 <= d <= d1 and not (drop_illness and bl.is_ill(d))
+        return d0 <= d <= d1 and not (drop_illness and ctx.is_ill(d))
 
     days = [d0 + timedelta(i) for i in range((d1 - d0).days + 1)]
     days = [d for d in days if keep(d)]
@@ -98,10 +97,10 @@ def inputs(health, mcp, d0, d1, drop_illness):
            if keep(date.fromisoformat(d))]
     worn = {date.fromisoformat(d) for d, n in health.execute(
         "SELECT date(t + utc_offset, 'unixepoch'), count(*) FROM hr_samples WHERE source=? GROUP BY 1",
-        (sc.WATCH,)) if n >= 30000}  # >= ~17 h of HR samples
+        (ctx.watch,)) if n >= 30000}  # >= ~17 h of HR samples
     steps = {}
     for t, off, n in health.execute("SELECT t_start, utc_offset, steps FROM steps_minute WHERE source=?",
-                                    (sc.WATCH,)):
+                                    (ctx.watch,)):
         d = sc.local_date(t, off)
         steps[d] = steps.get(d, 0) + n
     st = [steps.get(d, 0) for d in days if d in worn]
@@ -109,7 +108,7 @@ def inputs(health, mcp, d0, d1, drop_illness):
            mcp.execute("SELECT date, fat_burn_minutes, cardio_minutes, peak_minutes FROM azm")}
     mod = sum(azm.get(d, (0, 0))[0] for d in days) / weeks
     vig = sum(azm.get(d, (0, 0))[1] for d in days) / weeks
-    strength = sum((w["t_end"] - w["t_start"]) / 60 for w in bl.watch_workouts(mcp)
+    strength = sum((w["t_end"] - w["t_start"]) / 60 for w in bl.watch_workouts(ctx)
                    if w["log_type"] == "STRENGTH_TRAINING" and keep(w["day"])) / weeks
     sleep = [a / 60 for d, a in health.execute("SELECT date, asleep_min FROM score_sleep_daily")
              if keep(date.fromisoformat(d) - timedelta(1))]
@@ -117,7 +116,7 @@ def inputs(health, mcp, d0, d1, drop_illness):
     # SRI over all consecutive day pairs inside the window (noon-to-noon days),
     # on Phillips' -100..100 scale (2P - 1) so it matches the UK Biobank
     # quintiles in Windred 2024 (median 81)
-    sessions = bl.sleep_sessions(mcp)
+    sessions = bl.sleep_sessions(ctx)
     asleep = asleep_set(sessions)
     off = sessions[-1]["offset"] if sessions else 0
     vals = []
@@ -144,15 +143,16 @@ def evaluate(age, x):
     return yrs, adj, age + total
 
 
-def compute(health, mcp, verbose=True):
-    age, src = sc.age_years(mcp)
-    last = sc.today_local() - timedelta(1)          # last complete day
-    variants = {"all": (START, last, False), "excl_illness": (START, last, True),
+def compute(ctx, verbose=True):
+    age, src = sc.age_years(ctx.mcp)
+    start = ctx.analysis_start                      # first full watch days skipped
+    last = ctx.today - timedelta(1)                 # last complete day
+    variants = {"all": (start, last, False), "excl_illness": (start, last, True),
                 "last30": (last - timedelta(29), last, False),
                 "last30_excl_illness": (last - timedelta(29), last, True)}
     res = {}
     for name, (d0, d1, drop) in variants.items():
-        x = inputs(health, mcp, d0, d1, drop)
+        x = inputs(ctx, d0, d1, drop)
         yrs, adj, hage = evaluate(age, x)
         res[name] = {"x": x, "yrs": yrs, "adj": adj, "age": hage, "window": (d0, d1)}
 
@@ -160,7 +160,7 @@ def compute(health, mcp, verbose=True):
         return max(-1.0, min(3.0, (0.5 + (res[recent]["age"] - res[base]["age"])) / 0.5))
 
     paces = {"all": pace("all", "last30"), "excl_illness": pace("excl_illness", "last30_excl_illness")}
-    today = sc.today_local().isoformat()
+    today = ctx.today.isoformat()
     rows = []
     for name, r in res.items():
         for k in UNITS:
@@ -174,7 +174,7 @@ def compute(health, mcp, verbose=True):
         if name in paces:
             rows.append({"computed_on": today, "variant": name, "metric": "pace_of_aging", "value": paces[name],
                          "unit": "x", "note": "6-month projection from the last 30 days"})
-    sc.write_rows(health, "score_healthspan",
+    sc.write_rows(ctx.health, "score_healthspan",
                   ["computed_on", "variant", "metric", "value", "unit", "referent", "years", "years_adjusted", "note"],
                   ["computed_on", "variant", "metric"], rows)
     if verbose:
@@ -196,6 +196,10 @@ def report(age, src, res, paces):
               f"   | {sc.fmt(e['x'][k]):>7s} {e['adj'][k]:+6.2f}")
 
 
+def main(argv=None):
+    with Context.open() as ctx:
+        compute(ctx)
+
+
 if __name__ == "__main__":
-    h, m = sc.connect()
-    compute(h, m)
+    main()

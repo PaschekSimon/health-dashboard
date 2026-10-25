@@ -17,8 +17,8 @@ import json
 import sqlite3
 from datetime import date, datetime
 
-from . import paths
-import annotation_effects as effects
+from ..analysis import annotation_effects as effects
+from ..config import get_paths
 
 KINDS = effects.KINDS
 STATUSES = ("suggested", "confirmed", "rejected")
@@ -55,7 +55,8 @@ class AnnotationError(ValueError):
 
 
 def connect(db_path=None):
-    conn = sqlite3.connect(db_path or paths.HEALTH_DB, timeout=30)
+    """Writable connection to health.db (default: from the environment)."""
+    conn = sqlite3.connect(db_path or get_paths().health_db, timeout=30)
     conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 

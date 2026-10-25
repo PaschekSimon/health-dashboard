@@ -1,8 +1,9 @@
-"""Local API for the health dashboard. Binds to 127.0.0.1 only (see run_backend.ps1).
+"""Local API for the health dashboard. Binds to 127.0.0.1 by default.
 
-    .venv\\Scripts\\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8765
+    health serve            (= uvicorn health_dashboard.app:app --host 127.0.0.1 --port 8765)
 
 Endpoints are listed in docs/api.md; interactive docs at http://127.0.0.1:8765/docs.
+Data paths come from the environment on every request (config.get_paths).
 """
 
 import ipaddress
@@ -10,7 +11,6 @@ import mimetypes
 import os
 from contextlib import asynccontextmanager
 from datetime import date
-from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -19,10 +19,10 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from health_core import annotations as ann
-from health_core import explore, jobs, queries
+from .config import get_paths
+from .core import annotations as ann
+from .core import explore, jobs, queries
 
-WEB = Path(__file__).resolve().parent.parent / "frontend"
 # Windows' registry doesn't always know these, and Chrome wants the right type
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("font/woff2", ".woff2")
@@ -55,8 +55,11 @@ app = FastAPI(title="Health backend", version="1.0", lifespan=lifespan)
 # Extra host names (comma-separated) can be added with HEALTH_ALLOWED_HOSTS.
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-EXTRA_HOSTS = {h.strip().lower() for h in os.environ.get("HEALTH_ALLOWED_HOSTS", "").split(",") if h.strip()}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _extra_hosts():
+    return {h.strip().lower() for h in os.environ.get("HEALTH_ALLOWED_HOSTS", "").split(",") if h.strip()}
 
 
 def allowed_host(name):
@@ -66,7 +69,7 @@ def allowed_host(name):
     name = (name or "").lower().rstrip(".")
     if not name:
         return False
-    if name in LOCAL_HOSTS or name in EXTRA_HOSTS or name.endswith(".ts.net") or "." not in name:
+    if name in LOCAL_HOSTS or name in _extra_hosts() or name.endswith(".ts.net") or "." not in name:
         return True
     try:
         ipaddress.ip_address(name)
@@ -351,4 +354,4 @@ async def revalidate_web(request, call_next):
     return response
 
 
-app.mount("/app", StaticFiles(directory=WEB, html=True), name="web")
+app.mount("/app", StaticFiles(directory=get_paths().frontend, html=True, check_dir=False), name="web")

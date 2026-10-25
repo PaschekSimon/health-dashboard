@@ -7,19 +7,18 @@ Load per minute = 0.64 HRr e^(1.92 HRr) for HRr >= 0.30; strength workouts add
 minutes x 0.5. Strain = 21 (1 - e^(-L/k)), k frozen in scores_config.json so the
 95th-percentile day = 17.5 (k = L_p95 / ln 6).
 
-    python -I strain.py [--recalibrate]
+    python -m health_dashboard strain [--recalibrate]
 Writes score_strain_daily and score_strain_workout in health.db.
 """
 
+import argparse
 import math
 import statistics
-import sys
 from datetime import date, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
-import baseline as bl
-import scores_common as sc
+from ..analysis import baseline as bl
+from ..context import Context
+from . import common as sc
 
 HRR_FLOOR = 0.30
 STRENGTH_FACTOR = 0.5
@@ -46,12 +45,12 @@ def rhr_for_day(nrem, d):
     return statistics.median(vals)
 
 
-def workout_peaks(health, mcp):
+def workout_peaks(ctx):
     """[(day, peak 30 s average HR)] for every logged workout (any source;
     Strava copies have the same HR, which is fine for a maximum)."""
     out = []
-    for d, st, et in mcp.execute("SELECT date, start_time, end_time FROM exercises WHERE start_time IS NOT NULL"):
-        s = bl.hr_series(health, sc.parse_time(st), sc.parse_time(et))
+    for d, st, et in ctx.mcp.execute("SELECT date, start_time, end_time FROM exercises WHERE start_time IS NOT NULL"):
+        s = bl.hr_series(ctx, sc.parse_time(st), sc.parse_time(et))
         best, j, acc = None, 0, 0
         for i, (t, b) in enumerate(s):
             acc += b
@@ -66,13 +65,14 @@ def workout_peaks(health, mcp):
     return out
 
 
-def compute(health, mcp, recalibrate=False, verbose=True):
+def compute(ctx, recalibrate=False, verbose=True):
+    health, mcp = ctx.health, ctx.mcp
     age, _ = sc.age_years(mcp)
     tanaka = 208 - 0.7 * age
-    peaks = workout_peaks(health, mcp)
+    peaks = workout_peaks(ctx)
     nrem = nrem_by_night(mcp)
-    mhr = sc.minute_hr(health)
-    today = sc.today_local()
+    mhr = sc.minute_hr(ctx)
+    today = ctx.today
 
     def hrmax_for(d):
         p = [v for wd, v in peaks if d - timedelta(days=180) <= wd <= d]
@@ -82,7 +82,7 @@ def compute(health, mcp, recalibrate=False, verbose=True):
     days = {}
     for m, (bpm, off) in mhr.items():
         d = sc.local_date(m * 60, off)
-        if d < sc.START:
+        if d < ctx.watch_start:  # back-fill start
             continue
         rec = days.get(d)
         if rec is None:
@@ -97,7 +97,7 @@ def compute(health, mcp, recalibrate=False, verbose=True):
 
     # workouts (watch only): load inside the session, muscular bonus for strength
     workouts = []
-    for w in bl.watch_workouts(mcp):
+    for w in bl.watch_workouts(ctx):
         d = w["day"]
         rhr, hmax = rhr_for_day(nrem, d), hrmax_for(d)
         load = 0.0
@@ -121,7 +121,7 @@ def compute(health, mcp, recalibrate=False, verbose=True):
         r["partial"] = 1 if (r["date"] >= today or r["valid"] < FULL_DAY_MIN) else 0
 
     # calibration (once)
-    cfg = sc.load_config()
+    cfg = sc.load_config(ctx)
     if recalibrate or "strain" not in cfg:
         full = [r["load"] for r in days.values() if not r["partial"]]
         p95 = sc.percentile(full, 95)
@@ -129,10 +129,10 @@ def compute(health, mcp, recalibrate=False, verbose=True):
         strains = sorted(21 * (1 - math.exp(-x / k)) for x in full)
         cfg["strain"] = {"k": k, "load_p95": p95, "n_days": len(full),
                          "median_day_strain": statistics.median(strains),
-                         "calibrated_on": sc.today_local().isoformat(),
+                         "calibrated_on": ctx.today.isoformat(),
                          "hrr_floor": HRR_FLOOR, "strength_factor": STRENGTH_FACTOR,
                          "tanaka_hrmax": tanaka}
-        sc.save_config(cfg)
+        sc.save_config(ctx, cfg)
     k = cfg["strain"]["k"]
 
     def to_strain(x):
@@ -189,6 +189,13 @@ def report(rows, workouts, cfg, val, health):
     print("  recent workouts: " + ", ".join(f"{w['date'][5:]} {w['name']} {w['strain']:.1f}" for w in workouts[-5:]))
 
 
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--recalibrate", action="store_true", help="re-fit Strain k on the current history")
+    args = ap.parse_args(argv)
+    with Context.open() as ctx:
+        compute(ctx, recalibrate=args.recalibrate)
+
+
 if __name__ == "__main__":
-    h, m = sc.connect()
-    compute(h, m, recalibrate="--recalibrate" in sys.argv)
+    main()

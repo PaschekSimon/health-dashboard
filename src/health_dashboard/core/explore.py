@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, time, timedelta
 
 from . import annotations as ann
-from .queries import WATCH, _all, _annotations_by_date, _d, _one, _range, _round, short_id
+from .queries import _all, _annotations_by_date, _d, _one, _range, _round, short_id
 
 LOCAL_DAY = "date({c} + coalesce(utc_offset, 0), 'unixepoch')"
 EPOCH_COLS = ("t", "t_start", "t_end", "sleep_start", "sleep_end")
@@ -64,10 +64,10 @@ def activity(db, date_from=None, date_to=None):
             azm_cardio=r["cardio_minutes"], azm_peak=r["peak_minutes"])
     day = LOCAL_DAY.format(c="t_start")
     for r in _all(db.h, f"SELECT {day} d, sum(steps) n FROM steps_minute WHERE source = ? "
-                        "AND t_start BETWEEN ? AND ? GROUP BY d", (WATCH, lo, hi)):
+                        "AND t_start BETWEEN ? AND ? GROUP BY d", (db.watch, lo, hi)):
         put(r["d"], watch_steps=r["n"])
     for r in _all(db.h, f"SELECT {day} d, level, sum(minutes) n FROM active_minutes_minute WHERE source = ? "
-                        "AND t_start BETWEEN ? AND ? GROUP BY d, level", (WATCH, lo, hi)):
+                        "AND t_start BETWEEN ? AND ? GROUP BY d, level", (db.watch, lo, hi)):
         put(r["d"], **{f"active_{r['level'].lower()}": r["n"]})
     for r in _all(db.h, f"SELECT {day} d, sum(t_end - t_start) / 60.0 n FROM sedentary_periods "
                         "WHERE t_start BETWEEN ? AND ? GROUP BY d", (lo, hi)):
@@ -103,7 +103,7 @@ def day_detail(db, day):
     hours = {h: 0 for h in range(24)}
     for r in _all(db.h, f"SELECT cast(strftime('%H', t_start + coalesce(utc_offset,0), 'unixepoch') AS int) h, "
                         f"sum(steps) n FROM steps_minute WHERE source = ? AND t_start BETWEEN ? AND ? "
-                        f"AND {sexpr} = ? GROUP BY h", (WATCH, lo, hi, ds)):
+                        f"AND {sexpr} = ? GROUP BY h", (db.watch, lo, hi, ds)):
         hours[r["h"]] = r["n"]
     sedentary = [{"start": _local(r["t_start"], r["utc_offset"]), "end": _local(r["t_end"], r["utc_offset"])}
                  for r in _all(db.h, f"SELECT t_start, t_end, utc_offset FROM sedentary_periods "
@@ -297,7 +297,7 @@ def run_series(db, run_id):
     else:
         cadence, cad_res, cad_src = [], 60, None
         for r in _all(db.h, "SELECT t_start, t_end, steps FROM steps_minute WHERE source = ? AND t_end > ? "
-                            "AND t_start < ? ORDER BY t_start", (WATCH, t0, t1)):
+                            "AND t_start < ? ORDER BY t_start", (db.watch, t0, t1)):
             inside = min(r["t_end"], t1) - max(r["t_start"], t0)
             if inside >= 30 and r["t_end"] > r["t_start"]:
                 cadence.append({"s": (r["t_start"] + r["t_end"]) // 2 - t0,

@@ -20,21 +20,18 @@ mean difference with a 95 % CI (Welch) and n. Illness/alcohol nights are left
 out of the comparison groups except where they are the condition.
 
 Results replace the table analysis_weekly in health.db. Run:
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\python.exe -I weekly_summary.py
+    python -m health_dashboard weekly-summary
 """
 
 import math
 import statistics
-import sys
 import time
-from datetime import date, timedelta
-from pathlib import Path
+from datetime import timedelta
 
-sys.path.insert(0, str(Path(__file__).parent))
-import baseline as bl
-import run_report as rr
+from ..context import Context
+from . import baseline as bl
+from . import run_report as rr
 
-LOAD_START = bl.WATCH_START
 LATE_HOUR = 20
 OUTCOMES = {"ln_rmssd": "HRV (ln RMSSD)", "nrem_hr": "non-REM HR", "rhr": "resting HR", "skin_temp": "skin temp"}
 
@@ -48,11 +45,11 @@ def ewma(series, days):
     return out
 
 
-def sleep_minutes(mcp):
+def sleep_minutes(ctx):
     """Set of UTC minute indices spent asleep (any non-AWAKE stage, naps too),
     and the (first, last) minute covered by sleep records."""
     asleep, first, last = set(), None, None
-    for s in bl.sleep_sessions(mcp):
+    for s in bl.sleep_sessions(ctx):
         first = s["start"] // 60 if first is None else min(first, s["start"] // 60)
         last = s["end"] // 60 if last is None else max(last, s["end"] // 60)
         for a, b, kind in s["stages"]:
@@ -73,32 +70,33 @@ def sri(asleep, m0, m1, data_end):
     return 200 * p - 100, p
 
 
-def effect(nights, condition_nights, key, include_events=False):
+def effect(ctx, nights, condition_nights, key, include_events=False):
     """Mean difference (condition - other nights) for one outcome."""
     a, b = [], []
     for d, v in nights.items():
-        if d < bl.ANALYSIS_START or key not in v:
+        if d < ctx.analysis_start or key not in v:
             continue
         if d in condition_nights:
-            if include_events or not bl.is_excluded(d):
+            if include_events or not ctx.is_excluded(d):
                 a.append(v[key])
-        elif not bl.is_excluded(d):
+        elif not ctx.is_excluded(d):
             b.append(v[key])
     return bl.mean_diff_ci(a, b), len(a), len(b)
 
 
-def run():
-    health, mcp = bl.connect()
+def run(ctx):
+    health, mcp = ctx.health, ctx.mcp
     hr_max = bl.current_max_hr(health)
-    workouts = bl.watch_workouts(mcp)
-    today = date.today()
+    workouts = bl.watch_workouts(ctx)
+    today = ctx.today
+    load_start = ctx.watch_start
 
     # daily TRIMP and easy time
     trimp, easy = {}, {}
     late_days = set()
     for w in workouts:
         t0, t1, pauses = rr.run_window(w)
-        samples = bl.hr_series(health, t0, t1)
+        samples = bl.hr_series(ctx, t0, t1)
         trimp[w["day"]] = trimp.get(w["day"], 0) + bl.banister_trimp(samples, bl.resting_hr_for(mcp, w["day"]), hr_max)
         if (t1 + w["offset"]) % 86400 >= LATE_HOUR * 3600:
             late_days.add(w["day"])
@@ -112,15 +110,15 @@ def run():
             belowv += d * (b < zones["VIGOROUS"][0])
         easy[w["day"]] = (tot, below1, belowv)
 
-    days = [LOAD_START + timedelta(days=i) for i in range((today - LOAD_START).days + 1)]
+    days = [load_start + timedelta(days=i) for i in range((today - load_start).days + 1)]
     series = [(d, trimp.get(d, 0.0)) for d in days]
     fitness, fatigue = ewma(series, 42), ewma(series, 7)
 
-    asleep, _, sleep_end = sleep_minutes(mcp)
-    nights = bl.nightly_metrics(health, mcp)
+    asleep, _, sleep_end = sleep_minutes(ctx)
+    nights = bl.nightly_metrics(ctx)
 
     weeks = []
-    monday = bl.ANALYSIS_START - timedelta(days=bl.ANALYSIS_START.weekday())
+    monday = ctx.analysis_start - timedelta(days=ctx.analysis_start.weekday())
     while monday <= today:
         week = [monday + timedelta(days=i) for i in range(7)]
         last = min(week[-1], today)
@@ -148,17 +146,17 @@ def run():
     health.commit()
 
     # n-of-1: the night after day D is keyed D + 1
-    load_days = [d for d in days if bl.ANALYSIS_START <= d < today]
+    load_days = [d for d in days if ctx.analysis_start <= d < today]
     q3 = statistics.quantiles([trimp.get(d, 0) for d in load_days], n=4)[2]
     hard = {d + timedelta(days=1) for d in load_days if trimp.get(d, 0) >= q3 and trimp.get(d, 0) > 0}
     late = {d + timedelta(days=1) for d in late_days}
-    conditions = [("after alcohol", bl.ALCOHOL_NIGHTS, True),
+    conditions = [("after alcohol", ctx.exclusions.alcohol, True),
                   (f"after hard day (TRIMP >= {q3:.0f})", hard, False),
                   (f"after late session (ends after {LATE_HOUR}:00)", late, False)]
     effects = []
     for label, cond, incl in conditions:
         for key in OUTCOMES:
-            (diff, lo, hi), na, nb = effect(nights, cond, key, incl)
+            (diff, lo, hi), na, nb = effect(ctx, nights, cond, key, incl)
             effects.append((label, key, diff, lo, hi, na, nb))
     return weeks, effects, late_days
 
@@ -167,8 +165,9 @@ def f(v, spec):
     return format(v, spec) if v is not None else "-"
 
 
-if __name__ == "__main__":
-    weeks, effects, late_days = run()
+def main(argv=None):
+    with Context.open() as ctx:
+        weeks, effects, late_days = run(ctx)
     print("week      workouts  TRIMP  fitness fatigue  form  easy<1st easy<vig   SRI  P(same)")
     for w in weeks:
         print(f"{w['week']}  {w['workouts']:>5} {w['trimp']:7.0f} {w['fitness']:8.1f} {w['fatigue']:7.1f} "
@@ -180,3 +179,7 @@ if __name__ == "__main__":
         print(f"  {label:38} {OUTCOMES[key]:15} {f(diff, '+6.2f'):>6}  {ci:18} n={na}/{nb}")
     print(f"\nLate sessions found on: {', '.join(sorted(d.isoformat() for d in late_days)) or 'none'}"
           " (illness nights are excluded from that comparison).")
+
+
+if __name__ == "__main__":
+    main()

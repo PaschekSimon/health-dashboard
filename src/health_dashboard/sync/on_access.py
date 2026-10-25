@@ -1,25 +1,23 @@
-"""Start health_sync.py in the background when the health data is opened.
+"""Start the intraday sync in the background when the health data is opened.
 
-Called from the Claude Code SessionStart hook (Health\\.claude\\settings.json) and the
+Called from the Claude Code SessionStart hook (.claude/settings.json) and the
 google-health MCP's daily auto-sync, so health.db catches up whenever you
 look at your data instead of on a schedule. Returns at once: the sync runs in
 a detached process, is skipped if one finished in the last few hours, and a
 lock keeps two from running together. Output goes to data/logs/sync.log.
 
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\pythonw.exe sync_on_access.py
+    python -m health_dashboard sync-on-access
 """
 
+import argparse
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-DATA = HERE.parent / "data"
-STAMP = DATA / ".last_sync"
-LOCK = DATA / ".sync.lock"
-LOG = DATA / "logs" / "sync.log"
+from .. import procs
+from ..config import get_paths
+
 MIN_INTERVAL = 3 * 3600  # seconds since the last finished sync
 STALE_LOCK = 30 * 60  # a lock older than this is from a crashed run
 
@@ -31,36 +29,40 @@ def _age(path: Path) -> float:
         return float("inf")
 
 
-def start() -> None:
-    if _age(STAMP) < MIN_INTERVAL:
+def start(paths) -> None:
+    if _age(paths.last_sync) < MIN_INTERVAL:
         return
-    if _age(LOCK) < STALE_LOCK:
+    if _age(paths.sync_lock) < STALE_LOCK:
         return
-    LOCK.unlink(missing_ok=True)
+    paths.sync_lock.unlink(missing_ok=True)
     try:
-        os.close(os.open(LOCK, os.O_CREAT | os.O_EXCL))
+        os.close(os.open(paths.sync_lock, os.O_CREAT | os.O_EXCL))
     except FileExistsError:
         return
-    # pythonw: a detached python.exe (a venv launcher) opens a console window
-    python = Path(sys.executable).with_name("pythonw.exe")
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    subprocess.Popen([str(python), "-I", __file__, "--run"], cwd=HERE, creationflags=flags,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     close_fds=True)
+    procs.spawn(procs.module_cmd("health_dashboard", "sync-on-access", "--run", background=True))
 
 
-def run() -> None:
+def run(paths) -> None:
     try:
-        with open(LOG, "a", encoding="utf-8") as log:
+        paths.logs.mkdir(parents=True, exist_ok=True)
+        with open(paths.sync_log, "a", encoding="utf-8") as log:
             log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
             log.flush()
-            code = subprocess.call([sys.executable, "-I", str(HERE / "health_sync.py")], cwd=HERE,
-                                   stdout=log, stderr=log, creationflags=subprocess.CREATE_NO_WINDOW)
+            code = subprocess.call(procs.module_cmd("health_dashboard", "sync"),
+                                   stdout=log, stderr=log, **procs.hidden())
             log.write(f"exit {code}\n")
-        STAMP.touch()
+        paths.last_sync.touch()
     finally:
-        LOCK.unlink(missing_ok=True)
+        paths.sync_lock.unlink(missing_ok=True)
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--run", action="store_true", help="run the sync here (the detached child does this)")
+    args = ap.parse_args(argv)
+    paths = get_paths()
+    run(paths) if args.run else start(paths)
 
 
 if __name__ == "__main__":
-    run() if "--run" in sys.argv else start()
+    main()

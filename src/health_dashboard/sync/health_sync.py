@@ -6,12 +6,13 @@ energy, activity level, active minutes, heart-rate zone and zone minutes per
 minute, HRV and SpO2 samples, sedentary periods, altitude gain, swim lengths,
 VO2 max estimates, breathing rate per sleep stage, and daily heart-rate zone
 limits and calories per zone. It reuses the
-MCP's login and paging (`list_google_data_points`), so run it with the MCP's
-Python:
+MCP's login and paging (`list_google_data_points`; the google-health-mcp
+package is a dependency of this one, and its login lives in
+~/.config/google-health-mcp):
 
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\python.exe health_sync.py
-    ... health_sync.py --since 2026-01-01     # backfill from a date
-    ... health_sync.py --types heart-rate     # only some types
+    python -m health_dashboard sync
+    ... sync --since 2026-01-01     # backfill from a date
+    ... sync --types heart-rate     # only some types
 
 Each run resumes from the last synced day per type, re-reading the last two
 days because the watch uploads late. Rows are keyed by time and source, so
@@ -23,15 +24,14 @@ import argparse
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
-import user_settings
 from google_health_mcp.api import GOOGLE_TYPES, daily_roll_up, list_google_data_points
-from google_health_mcp.api import _interval as _interval_type, _sample as _sample_type
+from google_health_mcp.api import _interval as _interval_type
+from google_health_mcp.api import _sample as _sample_type
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "health.db"
-DEFAULT_SINCE = user_settings.WATCH_START  # first run only; later runs resume per type
+from ..config import get_paths
+from ..settings import load_settings
+
 OVERLAP_DAYS = 2
 
 SCHEMA = """
@@ -283,14 +283,16 @@ TYPES = {
 }
 
 
-def sync_type(conn, data_type: str, since: date | None, today: date) -> int:
+def sync_type(conn, data_type: str, since: date | None, today: date, first_day: date) -> int:
+    """Read one type into health.db. Without `since` it resumes after the last
+    synced day, or starts at `first_day` (the first watch day) on a first run."""
     table, build, ncols, window, method = TYPES[data_type]
     fetch = daily_roll_up if method == "rollup" else list_google_data_points
     if since is None:
         row = conn.execute(
             "SELECT synced_through FROM sync_state WHERE data_type = ?", (data_type,)
         ).fetchone()
-        since = (date.fromisoformat(row[0]) - timedelta(days=OVERLAP_DAYS)) if row else DEFAULT_SINCE
+        since = (date.fromisoformat(row[0]) - timedelta(days=OVERLAP_DAYS)) if row else first_day
     sql = f"INSERT OR REPLACE INTO {table} VALUES ({', '.join('?' * ncols)})"
     total = 0
     day = since
@@ -310,20 +312,22 @@ def sync_type(conn, data_type: str, since: date | None, today: date) -> int:
     return total
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--since", type=date.fromisoformat,
                         help="first day to (re)read; default resumes per type")
     parser.add_argument("--types", nargs="+", choices=sorted(TYPES), default=list(TYPES))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    conn = sqlite3.connect(DB_PATH)
+    paths = get_paths()
+    first_day = load_settings(paths).watch_start
+    conn = sqlite3.connect(paths.health_db)
     conn.executescript(SCHEMA)
     today = date.today()
     failed = False
     for data_type in args.types:
         try:
-            n = sync_type(conn, data_type, args.since, today)
+            n = sync_type(conn, data_type, args.since, today, first_day)
             print(f"{data_type:24} {n:>9} points")
         except Exception as e:  # keep going with the other types
             failed = True

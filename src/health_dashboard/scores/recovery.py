@@ -16,21 +16,20 @@ Recovery: HRV = Google's night-average RMSSD (hrv.daily_rmssd; deep-sleep window
   robust 30-night baseline without illness/alcohol nights, -0.5 if skin temp
   >= +0.5 C or SpO2 >= 2 points below baseline; Recovery = 1 + 98 Phi(C / s).
 
-    python -I recovery.py [--retune]
+    python -m health_dashboard recovery [--retune]
 Writes score_sleep_daily and score_recovery_daily in health.db. Needs
 score_strain_daily (runs strain.py first if it's missing).
 """
 
+import argparse
 import math
 import statistics
-import sys
 from datetime import date, datetime, timedelta, timezone
 from itertools import product
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
-import baseline as bl
-import scores_common as sc
+from ..analysis import baseline as bl
+from ..context import Context
+from . import common as sc
 
 DEFAULT_WEIGHTS = {"hrv": 0.50, "rhr": 0.25, "sleep": 0.15, "resp": 0.10}
 SP_WEIGHTS = {"sufficiency": 0.60, "consistency": 0.15, "efficiency": 0.15, "calm": 0.10}
@@ -82,12 +81,12 @@ def sri(asleep, end_utc, days):
     return 100 * same / ((days - 1) * 1440)
 
 
-def strain_slope(actual_hist, strain_by_day, night):
+def strain_slope(ctx, actual_hist, strain_by_day, night):
     """Extra minutes asleep per Strain point of the previous day, from the 60
     nights before `night` (OLS), clipped to 0..STRAIN_SLOPE_MAX; 0 with too few nights."""
     xs, ys = [], []
     for m, mins in actual_hist.items():
-        if night - timedelta(days=60) <= m < night and not sc.is_excluded(m):
+        if night - timedelta(days=60) <= m < night and not ctx.is_excluded(m):
             st = strain_by_day.get((m - timedelta(days=1)).isoformat())
             if st is not None:
                 xs.append(st)
@@ -99,14 +98,14 @@ def strain_slope(actual_hist, strain_by_day, night):
     return min(max(b, 0.0), STRAIN_SLOPE_MAX)
 
 
-def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
+def sleep_scores(ctx, strain_by_day, median_strain, rec_hrv):
     """Per night: sufficiency, consistency, efficiency, calm, performance.
     rec_hrv = {night: lnRMSSD} for the need personalisation."""
-    sessions = bl.sleep_sessions(mcp)
+    sessions = bl.sleep_sessions(ctx)
     asleep_all = asleep_set(sessions)
-    mhr = sc.minute_hr(health)
-    hrv = health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0",
-                         (sc.WATCH,)).fetchall()
+    mhr = sc.minute_hr(ctx)
+    hrv = ctx.health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0",
+                             (ctx.watch,)).fetchall()
 
     mains, naps, extra = {}, {}, {}
     for s in sessions:
@@ -131,7 +130,7 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
         night_stats[n] = {"nrem_mean": statistics.mean(nrem) if len(nrem) > 30 else None,
                           "nrem_sd": statistics.stdev(nrem) if len(nrem) > 30 else None,
                           "wins": wins}
-    eligible_all = [n for n in mains if not sc.is_excluded(n)]
+    eligible_all = [n for n in mains if not ctx.is_excluded(n)]
 
     out, need_hist, actual_hist = {}, {}, {}
     for n in sorted(mains):
@@ -141,7 +140,7 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
         actual_hist[n] = asleep_total
 
         # baseline need: nights followed by above-median HRV, not after a short night
-        window = [m for m in actual_hist if n - timedelta(days=60) <= m < n and not sc.is_excluded(m)]
+        window = [m for m in actual_hist if n - timedelta(days=60) <= m < n and not ctx.is_excluded(m)]
         hv = [rec_hrv[m] for m in window if rec_hrv.get(m) is not None]
         need_b = 8.2 * 60
         if len(hv) >= 10:
@@ -153,7 +152,7 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
                 need_b = min(max(statistics.mean(good), 7.0 * 60), 9.5 * 60)
         prev_day = n - timedelta(days=1)
         st = strain_by_day.get(prev_day.isoformat())
-        slope = strain_slope(actual_hist, strain_by_day, n)
+        slope = strain_slope(ctx, actual_hist, strain_by_day, n)
         need_strain = min(max(0.0, (st - median_strain) * slope), 45) if st is not None else 0.0
         # shortfall vs that night's need without its own debt term, so debt
         # doesn't compound from night to night
@@ -203,12 +202,12 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
 
 # --------------------------------------------------------- recovery ------
 
-def nightly_hrv(health, mcp, mains):
+def nightly_hrv(ctx, mains):
     """{night: (ln RMSSD, ms, source)}: Google's night-average RMSSD for the wake
     date; if Google has none, the deep-sleep value below."""
-    google = {date.fromisoformat(d): v for d, v in mcp.execute("SELECT date, daily_rmssd FROM hrv")
+    google = {date.fromisoformat(d): v for d, v in ctx.mcp.execute("SELECT date, daily_rmssd FROM hrv")
               if v and v > 0}
-    deep = deep_sleep_hrv(health, mcp, mains)
+    deep = deep_sleep_hrv(ctx, mains)
     out = {}
     for n in mains:
         if n in google:
@@ -218,13 +217,13 @@ def nightly_hrv(health, mcp, mains):
     return out
 
 
-def deep_sleep_hrv(health, mcp, mains):
+def deep_sleep_hrv(ctx, mains):
     """{night: (ln RMSSD, ms, source)} from the 5-min windows overlapping the last
     deep segment of the main sleep; fallback median of deep windows, then of
     all windows in the main sleep. (Used for Recovery until 2026-10-24; kept
     for display as deep_hrv_ms.)"""
-    hrv = health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0",
-                         (sc.WATCH,)).fetchall()
+    hrv = ctx.health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0",
+                             (ctx.watch,)).fetchall()
     out = {}
     for n, s in mains.items():
         wins = [(t, r) for t, r in hrv if s["start"] <= t < s["end"]]
@@ -261,7 +260,7 @@ def daily(mcp, table, col):
     return {date.fromisoformat(d): v for d, v in mcp.execute(f"SELECT date, {col} FROM {table}") if v is not None}
 
 
-def recovery_scores(inputs, weights):
+def recovery_scores(ctx, inputs, weights):
     """inputs: {night: {...}} with z's prepared; returns {night: row}."""
     comp = {}
     for n, x in inputs.items():
@@ -270,17 +269,17 @@ def recovery_scores(inputs, weights):
             continue
         wsum = sum(weights[k] for k in zs)
         comp[n] = sum(weights[k] * v for k, v in zs.items()) / wsum - x["penalty"]
-    eligible = {n: c for n, c in comp.items() if not sc.is_excluded(n)}
+    eligible = {n: c for n, c in comp.items() if not ctx.is_excluded(n)}
     glob_sd = statistics.stdev(eligible.values())
     out = {}
     for n, c in comp.items():
-        prior = sc.prior_eligible(eligible, n)
+        prior = sc.prior_eligible(ctx, eligible, n)
         s = statistics.stdev(prior) if len(prior) >= sc.BASE_MIN else glob_sd
         out[n] = {"composite": c, "s": s, "recovery": 1 + 98 * sc.PHI(c / s)}
     return out
 
 
-def tune(inputs, readiness):
+def tune(ctx, inputs, readiness):
     """Grid search (step 0.05, HRV >= 0.2) for the weights that maximise Pearson r
     of Recovery vs Readiness."""
     best = None
@@ -290,7 +289,7 @@ def tune(inputs, readiness):
         if wh < 0.2 or wp < 0:
             continue
         w = {"hrv": wh, "rhr": wr, "sleep": ws, "resp": wp}
-        rec = recovery_scores(inputs, w)
+        rec = recovery_scores(ctx, inputs, w)
         common = [n for n in rec if n in readiness]
         r, _ = sc.pearson([rec[n]["recovery"] for n in common], [readiness[n] for n in common])
         if r is not None and (best is None or r > best[0]):
@@ -298,21 +297,22 @@ def tune(inputs, readiness):
     return best
 
 
-def compute(health, mcp, retune=False, verbose=True):
+def compute(ctx, retune=False, verbose=True):
+    health, mcp = ctx.health, ctx.mcp
     if not health.execute("SELECT name FROM sqlite_master WHERE name='score_strain_daily'").fetchone():
-        import strain
-        strain.compute(health, mcp, verbose=False)
-    cfg = sc.load_config()
+        from . import strain
+        strain.compute(ctx, verbose=False)
+    cfg = sc.load_config(ctx)
     strain_by_day = dict(health.execute("SELECT date, strain FROM score_strain_daily"))
     median_strain = cfg["strain"]["median_day_strain"]
 
-    mains = bl.main_sleep_by_night(mcp)
-    hrv = nightly_hrv(health, mcp, {n: s for n, s in mains.items()})
+    mains = bl.main_sleep_by_night(ctx)
+    hrv = nightly_hrv(ctx, {n: s for n, s in mains.items()})
     ln_hrv = {n: v[0] for n, v in hrv.items()}
-    sleep, mains = sleep_scores(health, mcp, strain_by_day, median_strain, ln_hrv)
-    hrv = nightly_hrv(health, mcp, mains)
+    sleep, mains = sleep_scores(ctx, strain_by_day, median_strain, ln_hrv)
+    hrv = nightly_hrv(ctx, mains)
     ln_hrv = {n: v[0] for n, v in hrv.items()}
-    deep_hrv = deep_sleep_hrv(health, mcp, mains)
+    deep_hrv = deep_sleep_hrv(ctx, mains)
 
     rhr = daily(mcp, "heart_rate", "resting_hr")
     resp = daily(mcp, "breathing_rate", "breaths_per_min")
@@ -323,15 +323,15 @@ def compute(health, mcp, retune=False, verbose=True):
 
     inputs = {}
     for n in sorted(mains):
-        z_hrv, nb = sc.robust_z(ln_hrv, n, +1)
-        z_rhr, _ = sc.robust_z(rhr, n, -1, floor=SD_FLOOR["rhr"])
-        z_br, _ = sc.robust_z(resp, n, +1, floor=SD_FLOOR["resp"])
+        z_hrv, nb = sc.robust_z(ctx, ln_hrv, n, +1)
+        z_rhr, _ = sc.robust_z(ctx, rhr, n, -1, floor=SD_FLOOR["rhr"])
+        z_br, _ = sc.robust_z(ctx, resp, n, +1, floor=SD_FLOOR["resp"])
         z_resp = -max(0.0, z_br) if z_br is not None else None
         z_sleep = (sp[n] - 85) / 10 if n in sp else None
         flags, penalty = [], 0.0
         for series, name, test in ((skin, "skin temp", lambda x, med: x - med >= 0.5),
                                    (spo2, "SpO2", lambda x, med: med - x >= 2)):
-            prior = sc.prior_eligible(series, n)
+            prior = sc.prior_eligible(ctx, series, n)
             if n in series and len(prior) >= sc.BASE_MIN and test(series[n], statistics.median(prior)):
                 flags.append(name)
         if flags:
@@ -342,16 +342,16 @@ def compute(health, mcp, retune=False, verbose=True):
     readiness = {date.fromisoformat(d): s for d, s in
                  health.execute("SELECT date, score FROM takeout_daily_readiness WHERE score IS NOT NULL")}
     weights = cfg.get("recovery", {}).get("weights", DEFAULT_WEIGHTS)
-    rec = recovery_scores(inputs, weights)
+    rec = recovery_scores(ctx, inputs, weights)
     common = [n for n in rec if n in readiness]
     r0, n0 = sc.pearson([rec[n]["recovery"] for n in common], [readiness[n] for n in common])
     tuned = None
     if retune or "recovery" not in cfg:
-        rd = sc.pearson([recovery_scores(inputs, DEFAULT_WEIGHTS)[n]["recovery"] for n in common],
+        rd = sc.pearson([recovery_scores(ctx, inputs, DEFAULT_WEIGHTS)[n]["recovery"] for n in common],
                         [readiness[n] for n in common])[0]
         entry = {"default_weights": DEFAULT_WEIGHTS, "r_default": rd, "poor_threshold": POOR_R,
-                 "decided_on": sc.today_local().isoformat()}
-        tuned = tune(inputs, readiness)
+                 "decided_on": ctx.today.isoformat()}
+        tuned = tune(ctx, inputs, readiness)
         if tuned is None:  # no Google Readiness (Takeout) to check against
             entry.update(weights=DEFAULT_WEIGHTS, tuned=False)
         elif rd is None or rd < POOR_R:
@@ -360,9 +360,9 @@ def compute(health, mcp, retune=False, verbose=True):
             entry.update(weights=DEFAULT_WEIGHTS, tuned=False,
                          tune_check_not_applied={"weights": tuned[1], "r": tuned[0]})
         cfg["recovery"] = entry
-        sc.save_config(cfg)
+        sc.save_config(ctx, cfg)
         weights = entry["weights"]
-        rec = recovery_scores(inputs, weights)
+        rec = recovery_scores(ctx, inputs, weights)
         r0, n0 = sc.pearson([rec[n]["recovery"] for n in common], [readiness[n] for n in common])
 
     rows = []
@@ -382,7 +382,7 @@ def compute(health, mcp, retune=False, verbose=True):
                      "z_hrv": x["z_hrv"], "z_rhr": x["z_rhr"], "z_sleep": x["z_sleep"], "z_resp": x["z_resp"],
                      "penalty": x["penalty"], "flags": x["flags"], "baseline_n": x["baseline_n"],
                      "provisional": 1 if (x["baseline_n"] or 0) < sc.BASE_PROVISIONAL else 0,
-                     "excluded_event": 1 if sc.is_excluded(n) else 0,
+                     "excluded_event": 1 if ctx.is_excluded(n) else 0,
                      "sleep_performance": sp.get(n)})
     add_columns(health, "score_sleep_daily", ["need_strain_slope"])
     add_columns(health, "score_recovery_daily", ["deep_hrv_ms"])
@@ -392,7 +392,7 @@ def compute(health, mcp, retune=False, verbose=True):
                    "nap_prev_day_min", "need_strain_slope"], ["date"], list(sleep.values()))
     sc.write_rows(health, "score_recovery_daily", list(rows[0].keys()), ["date"], rows)
 
-    val = validate(health, rows, sleep, readiness, r0, n0)
+    val = validate(ctx, rows, sleep, readiness, r0, n0)
     val["weights"] = weights
     val["config"] = cfg["recovery"]
     if verbose:
@@ -400,10 +400,10 @@ def compute(health, mcp, retune=False, verbose=True):
     return rows, sleep, val
 
 
-def validate(health, rows, sleep, readiness, r_rec, n_rec):
+def validate(ctx, rows, sleep, readiness, r_rec, n_rec):
     # Google sleep score v2: the longest sleep per local wake date
     g = {}
-    for end, off, overall, mins in health.execute(
+    for end, off, overall, mins in ctx.health.execute(
             "SELECT sleep_end, utc_offset, overall, sleep_minutes FROM takeout_sleep_score "
             "WHERE algorithm='sleep_session_v2' AND overall IS NOT NULL"):
         d = sc.local_date(end, off)
@@ -414,8 +414,8 @@ def validate(health, rows, sleep, readiness, r_rec, n_rec):
     ys = [g[n][0] for n in nights if n in g]
     recd = {date.fromisoformat(r["date"]): r for r in rows if r["recovery"] is not None}
     common = [n for n in recd if n in readiness]
-    ill = [recd[n] for n in recd if bl.is_ill(n)]
-    alc_night = max((n for n in bl.ALCOHOL_NIGHTS if n in recd), default=None)
+    ill = [recd[n] for n in recd if ctx.is_ill(n)]
+    alc_night = max((n for n in ctx.exclusions.alcohol if n in recd), default=None)
     alc = recd.get(alc_night)
     return {"r_recovery_readiness": r_rec, "n_recovery": n_rec,
             "rho_recovery_readiness": sc.spearman([recd[n]["recovery"] for n in common],
@@ -454,6 +454,13 @@ def report(rows, sleep, val):
               f"  HRV {r['hrv_ms']} ({r['hrv_source']})  RHR {r['rhr']}{'  ' + r['flags'] if r['flags'] else ''}")
 
 
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--retune", action="store_true", help="re-decide the weights against Google Readiness")
+    args = ap.parse_args(argv)
+    with Context.open() as ctx:
+        compute(ctx, retune=args.retune)
+
+
 if __name__ == "__main__":
-    h, m = sc.connect()
-    compute(h, m, retune="--retune" in sys.argv)
+    main()

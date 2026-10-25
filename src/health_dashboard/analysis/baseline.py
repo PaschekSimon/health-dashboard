@@ -9,42 +9,22 @@ Times in health.db are UTC epoch seconds with the local UTC offset beside them.
 A "night" is keyed by the local date you wake up on (same as the MCP's sleep
 table), so night 2026-10-04 is the night from 3 to 4 October.
 
-Only data of one watch is used (data/settings.json, see user_settings.py);
-analyses start 6 days after its first day (ANALYSIS_START) so the first days
-of calibration don't skew things.
+Only data of one watch is used (data/settings.json, see settings.py);
+analyses start 6 days after its first day (Context.analysis_start) so the
+first days of calibration don't skew things. Illness and alcohol nights
+(confirmed annotations, see annotation_effects.py) are left out of every
+baseline. Functions that need any of that take the run's Context (ctx).
 
-Run with the MCP's Python (no numpy needed):
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\python.exe -I baseline.py
-which prints the nightly table and the HR zones as a quick self-test.
+    python -m health_dashboard baseline
+prints the nightly table and the HR zones as a quick self-test.
 """
 
 import json
 import math
-import os
-import sqlite3
 import statistics
 from datetime import date, datetime, timedelta, timezone
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir
-import annotation_effects
-import user_settings
-
-DATA = Path(__file__).resolve().parent.parent / "data"
-HEALTH_DB = DATA / "health.db"
-MCP_DB = Path(os.path.expanduser("~/.local/share/google-health-mcp/google_health.db"))
-
-WATCH = user_settings.WATCH
-WATCH_START = user_settings.WATCH_START
-ANALYSIS_START = WATCH_START + timedelta(days=6)
-
-# Illness and alcohol nights, excluded from every baseline. They come from the
-# confirmed annotations in health.db (which kind excludes what is decided in
-# annotation_effects.py). No table yet: nothing is excluded.
-_events = annotation_effects.load_exclusions(HEALTH_DB)
-ILLNESS_PERIODS = _events["illness"] if _events else []   # [(first, last night)]
-ALCOHOL_NIGHTS = _events["alcohol"] if _events else set()
+from ..context import Context
 
 BASELINE_MAX_NIGHTS = 42   # use up to this many eligible nights ...
 BASELINE_MIN_NIGHTS = 28   # ... a baseline with fewer is marked provisional
@@ -63,15 +43,6 @@ SIGNALS = {
 }
 
 
-def connect():
-    """Return (health_db, mcp_db) connections. The takeout_* tables are created
-    empty if no Takeout was imported yet, so the scripts can query them."""
-    import takeout_import
-    health = sqlite3.connect(HEALTH_DB)
-    health.executescript(takeout_import.SCHEMA)
-    return health, sqlite3.connect(MCP_DB)
-
-
 def parse_time(s):
     """ISO time from the MCP ('2026-10-10T06:45:53Z') -> UTC epoch seconds."""
     return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
@@ -81,25 +52,15 @@ def local_date(t, offset):
     return datetime.fromtimestamp(t + (offset or 0), tz=timezone.utc).date()
 
 
-def is_ill(d):
-    """True if d falls in a confirmed illness period."""
-    return any(a <= d <= b for a, b in ILLNESS_PERIODS)
-
-
-def is_excluded(night):
-    """True for illness and alcohol nights."""
-    return is_ill(night) or night in ALCOHOL_NIGHTS
-
-
 # ---------------------------------------------------------------- sleep ----
 
-def sleep_sessions(mcp):
+def sleep_sessions(ctx):
     """All watch sleep sessions (main sleep and naps) as dicts with
     start/end (epoch), offset, wake date, and stages [(start, end, type)]."""
     out = []
-    for date_s, record in mcp.execute("SELECT date, record FROM sleep_sessions ORDER BY start_time"):
+    for date_s, record in ctx.mcp.execute("SELECT date, record FROM sleep_sessions ORDER BY start_time"):
         rec = json.loads(record)
-        if rec.get("dataSource", {}).get("device", {}).get("displayName") != WATCH:
+        if rec.get("dataSource", {}).get("device", {}).get("displayName") != ctx.watch:
             continue
         s = rec["sleep"]
         offset = int(s["interval"].get("startUtcOffset", "0s").rstrip("s"))
@@ -115,10 +76,10 @@ def sleep_sessions(mcp):
     return out
 
 
-def main_sleep_by_night(mcp):
+def main_sleep_by_night(ctx):
     """Longest sleep session per wake date."""
     best = {}
-    for s in sleep_sessions(mcp):
+    for s in sleep_sessions(ctx):
         cur = best.get(s["night"])
         if cur is None or s["end"] - s["start"] > cur["end"] - cur["start"]:
             best[s["night"]] = s
@@ -127,7 +88,7 @@ def main_sleep_by_night(mcp):
 
 # -------------------------------------------------------- nightly table ----
 
-def nightly_metrics(health, mcp):
+def nightly_metrics(ctx):
     """{night: {signal: value}} for every night with watch data.
 
     rhr, nrem_hr, breathing, skin_temp and sleep_min come from the MCP's daily
@@ -135,6 +96,7 @@ def nightly_metrics(health, mcp):
     samples inside the main sleep. steps = watch steps on the local day before
     the night (the day that leads into it).
     """
+    health, mcp = ctx.health, ctx.mcp
     nights = {}
 
     def put(night, key, value):
@@ -152,16 +114,16 @@ def nightly_metrics(health, mcp):
     for d, v in mcp.execute("SELECT date, total_minutes FROM sleep"):
         put(d, "sleep_min", v)
 
-    for night, s in main_sleep_by_night(mcp).items():
+    for night, s in main_sleep_by_night(ctx).items():
         vals = [r for (r,) in health.execute(
             "SELECT rmssd_ms FROM hrv_samples WHERE source=? AND t BETWEEN ? AND ? AND rmssd_ms > 0",
-            (WATCH, s["start"], s["end"]))]
+            (ctx.watch, s["start"], s["end"]))]
         if len(vals) >= 6:  # at least 30 minutes of HRV windows
             put(night.isoformat(), "ln_rmssd", math.log(statistics.mean(vals)))
 
     steps = {}
     for t, off, n in health.execute(
-            "SELECT t_start, utc_offset, steps FROM steps_minute WHERE source=?", (WATCH,)):
+            "SELECT t_start, utc_offset, steps FROM steps_minute WHERE source=?", (ctx.watch,)):
         d = local_date(t, off)
         steps[d] = steps.get(d, 0) + n
     for d, n in steps.items():
@@ -169,7 +131,7 @@ def nightly_metrics(health, mcp):
 
     # drop "nights" that only have steps (e.g. tonight, not slept yet)
     return {k: nights[k] for k in sorted(nights)
-            if k >= WATCH_START and set(nights[k]) - {"steps"}}
+            if k >= ctx.watch_start and set(nights[k]) - {"steps"}}
 
 
 # ------------------------------------------------------ robust baseline ----
@@ -178,14 +140,14 @@ def mad(values, centre):
     return statistics.median(abs(v - centre) for v in values)
 
 
-def baseline_nights(nights, night, key):
+def baseline_nights(ctx, nights, night, key):
     """Values for the baseline of `night`: up to 42 most recent eligible
     nights before it, skipping the last 2 nights, illness/alcohol nights and
-    anything before ANALYSIS_START."""
+    anything before ctx.analysis_start."""
     cutoff = night - timedelta(days=BASELINE_SKIP)
     vals = []
     for d in sorted(nights, reverse=True):
-        if d >= cutoff or d < ANALYSIS_START or is_excluded(d):
+        if d >= cutoff or d < ctx.analysis_start or ctx.is_excluded(d):
             continue
         v = nights[d].get(key)
         if v is not None:
@@ -195,12 +157,12 @@ def baseline_nights(nights, night, key):
     return vals
 
 
-def robust_z(nights, night, key):
+def robust_z(ctx, nights, night, key):
     """(z, median, n) with z = sign * (x - median) / (1.4826 * MAD); positive
     means worse. z is None if the night has no value or the baseline has fewer
     than BASELINE_FLOOR nights."""
     x = nights.get(night, {}).get(key)
-    vals = baseline_nights(nights, night, key)
+    vals = baseline_nights(ctx, nights, night, key)
     if len(vals) < BASELINE_FLOOR:
         return None, None, len(vals)
     med = statistics.median(vals)
@@ -275,17 +237,18 @@ def banister_trimp(samples, rest, hr_max, max_gap=10):
     return total
 
 
-def hr_series(health, t_start, t_end):
-    return health.execute("SELECT t, bpm FROM hr_samples WHERE source=? AND t BETWEEN ? AND ? ORDER BY t",
-                          (WATCH, t_start, t_end)).fetchall()
+def hr_series(ctx, t_start, t_end):
+    return ctx.health.execute("SELECT t, bpm FROM hr_samples WHERE source=? AND t BETWEEN ? AND ? ORDER BY t",
+                              (ctx.watch, t_start, t_end)).fetchall()
 
 
-def watch_workouts(mcp):
+def watch_workouts(ctx):
     """Watch-recorded workouts (the MCP also stores Strava duplicates with no
     source; those are skipped)."""
     cols = ("log_id", "date", "name", "log_type", "start_time", "end_time", "avg_hr",
             "distance_km", "metrics_summary", "exercise_events", "splits", "start_utc_offset")
-    rows = mcp.execute(f"SELECT {', '.join(cols)} FROM exercises WHERE source=? ORDER BY start_time", (WATCH,))
+    rows = ctx.mcp.execute(f"SELECT {', '.join(cols)} FROM exercises WHERE source=? ORDER BY start_time",
+                           (ctx.watch,))
     out = []
     for r in rows:
         w = dict(zip(cols, r))
@@ -296,16 +259,16 @@ def watch_workouts(mcp):
     return out
 
 
-def workout_trimp(health, mcp, w, hr_max):
-    return banister_trimp(hr_series(health, w["t_start"], w["t_end"]), resting_hr_for(mcp, w["day"]), hr_max)
+def workout_trimp(ctx, w, hr_max):
+    return banister_trimp(hr_series(ctx, w["t_start"], w["t_end"]), resting_hr_for(ctx.mcp, w["day"]), hr_max)
 
 
-def daily_trimp(health, mcp, hr_max=None):
+def daily_trimp(ctx, hr_max=None):
     """{local date: summed TRIMP of that day's watch workouts}."""
-    hr_max = hr_max or current_max_hr(health)
+    hr_max = hr_max or current_max_hr(ctx.health)
     out = {}
-    for w in watch_workouts(mcp):
-        out[w["day"]] = out.get(w["day"], 0.0) + workout_trimp(health, mcp, w, hr_max)
+    for w in watch_workouts(ctx):
+        out[w["day"]] = out.get(w["day"], 0.0) + workout_trimp(ctx, w, hr_max)
     return out
 
 
@@ -336,11 +299,15 @@ def mean_diff_ci(a, b):
     return diff, diff - q * se, diff + q * se
 
 
+def main(argv=None):
+    with Context.open() as ctx:
+        nights = nightly_metrics(ctx)
+        print("night       " + " ".join(f"{k:>9}" for k in SIGNALS))
+        for d, v in list(nights.items())[-10:]:
+            print(d, " ".join(f"{v.get(k, float('nan')):9.2f}" for k in SIGNALS))
+        zones = hr_zones(ctx.health, ctx.today)
+        print("zones today:", zones, "-> max HR", max_hr(zones))
+
+
 if __name__ == "__main__":
-    health, mcp = connect()
-    nights = nightly_metrics(health, mcp)
-    print("night       " + " ".join(f"{k:>9}" for k in SIGNALS))
-    for d, v in list(nights.items())[-10:]:
-        print(d, " ".join(f"{v.get(k, float('nan')):9.2f}" for k in SIGNALS))
-    zones = hr_zones(health, date.today())
-    print("zones today:", zones, "-> max HR", max_hr(zones))
+    main()

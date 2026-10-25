@@ -3,36 +3,21 @@ healthspan.py). Builds on baseline.py (data loaders, event exclusions) and
 adds what the scores need on top: per-minute HR, robust 30-night baselines,
 the frozen config file, simple statistics and the score tables.
 
-Spec: docs/scores.md. Pure standard library, so it runs with the
-MCP's Python:
-    %APPDATA%\\uv\\tools\\google-health-mcp\\Scripts\\python.exe -I run_scores.py
+Spec: docs/scores.md. Pure standard library (no numpy). Run all scores with
+    python -m health_dashboard scores
 """
 
 import json
 import math
 import statistics
 from datetime import datetime, timezone
-from pathlib import Path
 
-import baseline as bl
-from baseline import WATCH, is_excluded, parse_time  # noqa: F401  (re-exported)
+from ..analysis.baseline import parse_time  # noqa: F401  (re-exported)
 
-# Frozen calibration (Strain k, Recovery weights), fitted on your own history
-# the first time the scores run; personal, so it lives with the data.
-CONFIG = Path(__file__).resolve().parent.parent / "data" / "scores_config.json"
-START = bl.WATCH_START           # back-fill start
 BASE_NIGHTS = 30                 # robust baseline: last 30 eligible nights
 BASE_MIN = 7                     # fewer -> no score
 BASE_PROVISIONAL = 14            # fewer -> score marked provisional
 PHI = statistics.NormalDist().cdf
-
-
-def connect():
-    return bl.connect()
-
-
-def today_local():
-    return datetime.now().date()
 
 
 def local_date(t, offset):
@@ -45,15 +30,19 @@ def local_midnight_utc(d, offset):
 
 
 # ------------------------------------------------------------- config ----
+# Frozen calibration (Strain k, Recovery weights), fitted on your own history
+# the first time the scores run; personal, so it lives with the data
+# (ctx.paths.scores_config).
 
-def load_config():
-    if CONFIG.exists():
-        return json.loads(CONFIG.read_text(encoding="utf-8"))
+def load_config(ctx):
+    path = ctx.paths.scores_config
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
-def save_config(cfg):
-    CONFIG.write_text(json.dumps(cfg, indent=2, default=str), encoding="utf-8")
+def save_config(ctx, cfg):
+    ctx.paths.scores_config.write_text(json.dumps(cfg, indent=2, default=str), encoding="utf-8")
 
 
 # ---------------------------------------------------------------- age ----
@@ -71,17 +60,14 @@ def age_years(mcp):
 
 # ----------------------------------------------------- per-minute HR -----
 
-_MINUTE_HR = None
-
-
-def minute_hr(health):
-    """{utc_minute: (median_bpm, utc_offset)} for minutes with >= 10 samples."""
-    global _MINUTE_HR
-    if _MINUTE_HR is not None:
-        return _MINUTE_HR
+def minute_hr(ctx):
+    """{utc_minute: (median_bpm, utc_offset)} for minutes with >= 10 samples.
+    Built once per Context (ctx.cache)."""
+    if "minute_hr" in ctx.cache:
+        return ctx.cache["minute_hr"]
     out, cur, vals, off = {}, None, [], 0
-    for t, o, bpm in health.execute(
-            "SELECT t, utc_offset, bpm FROM hr_samples WHERE source=? ORDER BY t", (WATCH,)):
+    for t, o, bpm in ctx.health.execute(
+            "SELECT t, utc_offset, bpm FROM hr_samples WHERE source=? ORDER BY t", (ctx.watch,)):
         m = t // 60
         if m != cur:
             if cur is not None and len(vals) >= 10:
@@ -90,7 +76,7 @@ def minute_hr(health):
         vals.append(bpm)
     if cur is not None and len(vals) >= 10:
         out[cur] = (statistics.median(vals), off)
-    _MINUTE_HR = out
+    ctx.cache["minute_hr"] = out
     return out
 
 
@@ -105,12 +91,12 @@ def robust_center_spread(vals):
     return med, spread
 
 
-def prior_eligible(series, night, n=BASE_NIGHTS):
+def prior_eligible(ctx, series, night, n=BASE_NIGHTS):
     """Values of up to n most recent nights before `night` that have a value
     and are not illness/alcohol nights. `series` = {date: value}."""
     out = []
     for d in sorted((d for d in series if d < night), reverse=True):
-        if is_excluded(d) or series[d] is None:
+        if ctx.is_excluded(d) or series[d] is None:
             continue
         out.append(series[d])
         if len(out) == n:
@@ -118,11 +104,11 @@ def prior_eligible(series, night, n=BASE_NIGHTS):
     return out
 
 
-def robust_z(series, night, sign=+1, floor=0.0):
+def robust_z(ctx, series, night, sign=+1, floor=0.0):
     """(z, n_baseline). Positive z = better when sign is chosen accordingly.
     `floor` is a minimum spread, for coarse signals (integer RHR)."""
     x = series.get(night)
-    vals = prior_eligible(series, night)
+    vals = prior_eligible(ctx, series, night)
     if x is None or len(vals) < BASE_MIN:
         return None, len(vals)
     med, spread = robust_center_spread(vals)
