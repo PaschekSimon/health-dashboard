@@ -129,21 +129,28 @@ for t in tables:
                    lambda db, t=t: explore.browse(db, t["source"], t["table"], limit=20)))
 
 failed = 0
-with TestClient(appmod.app) as client:
-    for url, model, fn in routes:
-        r = client.get(url)
-        problems = []
-        if r.status_code == 200:
-            with queries.Db() as db:
-                raw = json.loads(json.dumps(fn(db)))
-            if raw is not None:
-                problems = [f"not in the model: {k}" for k in undeclared(model, raw)] + differs(raw, r.json())
-        elif not (r.status_code == 404 and url.startswith("/workout-series/")):  # workouts without a Google row
-            problems = [r.text[:1500]]
-        failed += bool(problems)
-        print(f"{'ok  ' if not problems else 'FAIL'} {r.status_code} {url}")
-        for p in problems[:10]:
-            print("     ", p)
-shutil.rmtree(tmp, ignore_errors=True)
+try:
+    with TestClient(appmod.app) as client:
+        for url, model, fn in routes:
+            try:
+                r = client.get(url)
+            except Exception as e:  # a response that fails its model raises here, with the details
+                failed += 1
+                print(f"FAIL 500 {url}\n      {type(e).__name__}: {str(e)[:1500]}")
+                continue
+            problems = []
+            if r.status_code == 200:
+                with queries.Db() as db:
+                    raw = json.loads(json.dumps(fn(db)))
+                if raw is not None:
+                    problems = [f"not in the model: {k}" for k in undeclared(model, raw)] + differs(raw, r.json())
+            elif not (r.status_code == 404 and url.startswith("/workout-series/")):  # workouts without a Google row
+                problems = [r.text[:1500]]
+            failed += bool(problems)
+            print(f"{'ok  ' if not problems else 'FAIL'} {r.status_code} {url}")
+            for p in problems[:10]:
+                print("     ", p)
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
 print(f"\n{len(routes) - failed}/{len(routes)} routes ok")
 sys.exit(1 if failed else 0)

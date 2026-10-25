@@ -667,7 +667,7 @@ class HealthspanRow(Model):
     metric: str
     value: float | None = None
     unit: str | None = None
-    referent: float | None = None
+    referent: Num | str | None = Field(None, description='the guideline value, or a range as text: "(7.0, 9.0)"')
     years: float | None = None
     years_adjusted: float | None = None
     note: str | None = None
