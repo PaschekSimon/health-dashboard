@@ -4,6 +4,17 @@ The dashboard in `frontend/` talks to the FastAPI app in `backend/app.py`
 (http://127.0.0.1:8765, this PC only). Interactive docs for every endpoint:
 http://127.0.0.1:8765/docs.
 
+Every route has a Pydantic response model (`backend/health_core/schemas.py`),
+so `/docs` shows each answer's shape and http://127.0.0.1:8765/openapi.json
+describes all of them. TypeScript types can be made from it:
+
+```
+npx openapi-typescript http://127.0.0.1:8765/openapi.json -o api.d.ts
+```
+
+Fields that can be empty are always sent, as `null`. A column a script adds
+later is passed through before the model lists it.
+
 ## Endpoints
 
 Dates are `YYYY-MM-DD`, local. A night is keyed by its wake date. Every read
@@ -11,14 +22,15 @@ answer includes the annotations touching it (`annotations`, and `annotation_ids`
 
 | Method | Path | What |
 |---|---|---|
+| GET | `/meta` | fixed lists: annotation kinds/statuses/sources, sync steps (name + label) by job reason, Recovery and Strain bands, Strain targets, trend metrics |
 | POST | `/sync` `{"reason": "open"\|"button"}` | start a sync job, returns its row (`id`, `status`) |
 | GET | `/sync/{id}` | job status and steps (`running`, `ok`, `partial`, `failed`, `skipped`, `busy`, `interrupted`) |
 | GET | `/status` | last successful sync, newest data per table, health_sync watermarks, sync running?, last 5 runs |
-| GET | `/dashboard?date=` | Recovery %, last night's sleep + Sleep Performance, Strain + target, steps, this week's running, daily-check warning |
+| GET | `/dashboard?date=` | Recovery %, last night's sleep + Sleep Performance, Strain + target, steps, this week's running (with `easy_pct`), daily-check warning |
 | GET | `/recovery?from=&to=` | daily Recovery with z-scores and the daily-check flag (default: last 30 days) |
 | GET | `/sleep?from=&to=` | Google's sleep summary + Sleep Performance per night |
-| GET | `/runs?from=&to=` | runs from `analysis_workouts` (+ Strain); `&all_types=true` for every workout |
-| GET | `/runs/{id}` | one workout: analysis, Google summary, km splits (id = short numeric id or full log_id) |
+| GET | `/runs?from=&to=` | runs from `analysis_workouts` (+ Strain) and a `running` summary (runs, km, minutes, TRIMP, `easy_pct`); `&all_types=true` for every workout |
+| GET | `/runs/{id}` | one workout: analysis, Google summary, km splits, minutes per HR zone Z1–Z5 (`hr_zones`) (id = short numeric id or full log_id) |
 | GET | `/trend/{metric}?from=&to=` | one metric over time (recovery, hrv_ms, rhr, sleep_performance, strain, steps, ...) |
 | GET | `/explain/{recovery\|sleep\|strain}?date=` | score broken into components |
 | GET | `/activity?from=&to=` | per day: steps (watch), Google steps, distance, floors, calories, AZM, active minutes, sitting time |
@@ -44,6 +56,22 @@ Requests with a `Host` the API doesn't know (anything but `127.0.0.1`,
 `HEALTH_ALLOWED_HOSTS`) get a 403, and so do writes (POST, DELETE) whose
 `Origin` is another site. This keeps web pages on other sites from changing
 your data through your browser.
+
+## Zones and easy share
+
+Google reports four heart-rate zones; the app shows five. Z1, Z2 and Z5 are
+Google's light, moderate and peak zones, and Z3 and Z4 split Google's
+vigorous zone at its middle (`split_bpm`, about 72 % of heart-rate reserve).
+The minutes per zone come from the run analysis; the vigorous minutes are
+shared out between Z3 and Z4 by how the workout's 10-second HR means fall
+either side of the split (without HR samples they all count as Z3). In
+`hr_zones`, `from_bpm` is the zone's lowest bpm and `to_bpm` the first bpm
+above it.
+
+`easy_pct` is the share of run time at or below the top of Z2
+(`pct_below_vigorous` of each run, weighted by its minutes). Both are worked
+out in `backend/health_core/zones.py`, so the app and the MCP server show the
+same numbers.
 
 ## Sync rules
 

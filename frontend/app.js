@@ -27,6 +27,12 @@ function get(path) {
   p.catch(() => cache.delete(path));
   return p;
 }
+// Fixed lists from the backend (annotation kinds, sync steps by job reason),
+// fetched once per page load; null if the call failed.
+const META = fetchJson("/meta").catch(() => null);
+let meta = null;
+META.then(m => { meta = m; });
+
 const prefetch = (...paths) => setTimeout(() => paths.forEach(p => get(p).catch(() => {})), 300);
 
 async function send(method, path, body) {
@@ -408,13 +414,10 @@ function ring(value, max, cls, inner, target) {
 VIEWS.dashboard = {
   async load(args) {
     const d = args[0] || today();
-    const mon = mondayOf(d);
-    const [dash, week] = await Promise.all([get(`/dashboard?date=${d}`), get(`/runs?from=${mon}&to=${addDays(mon, 6)}`)]);
+    const dash = await get(`/dashboard?date=${d}`);
     const rec = dash.recovery, sp = dash.sleep.performance, sg = dash.sleep.google;
     const st = dash.strain.today, tgt = dash.strain.target, act = dash.google_daily_activity || {};
     const rw = dash.running_week;
-    const easyMin = week.runs.reduce((s, r) => s + (r.pct_below_vigorous != null ? r.minutes * r.pct_below_vigorous / 100 : 0), 0);
-    const easyBase = week.runs.reduce((s, r) => s + (r.pct_below_vigorous != null ? r.minutes : 0), 0);
     const dc = dash.daily_check;
 
     const ZN = { rhr: "resting HR", ln_rmssd: "HRV", nrem_hr: "non-REM HR", breathing: "breathing rate", skin_temp: "skin temperature", sleep_min: "sleep time", steps: "steps" };
@@ -454,7 +457,7 @@ VIEWS.dashboard = {
       <a class="card wide" href="#/training"><div class="label">Running this week</div>
         <div class="big">${n1(rw.km)}<small> km</small></div>
         <div class="kvs">${kv("Runs", rw.runs)}${kv("Time", fHM(rw.minutes))}
-        ${kv(hint("easy", "Easy (Z1–Z2)"), easyBase ? pct(easyMin / easyBase * 100) + " of run time" : "–")}</div></a>`;
+        ${kv(hint("easy", "Easy (Z1–Z2)"), rw.easy_pct != null ? pct(rw.easy_pct) + " of run time" : "–")}</div></a>`;
 
     const anns = dash.annotations.length ? `<div class="note events-note">Events: ${dash.annotations.map(a => `${esc(a.kind)}${a.note ? " · " + esc(a.note) : ""}`).join("; ")}</div>` : "";
 
@@ -472,9 +475,7 @@ VIEWS.dashboard = {
         document.getElementById("next").onclick = () => go(addDays(d, 1));
         document.getElementById("day").onchange = e => e.target.value && go(e.target.value);
         document.getElementById("tod").onclick = () => location.hash = "#/dashboard";
-        const pm = mondayOf(addDays(d, -1));
-        prefetch(`/dashboard?date=${addDays(d, -1)}`, `/runs?from=${pm}&to=${addDays(pm, 6)}`,
-          ...(d < today() ? [`/dashboard?date=${addDays(d, 1)}`, `/runs?from=${mondayOf(addDays(d, 1))}&to=${addDays(mondayOf(addDays(d, 1)), 6)}`] : []));
+        prefetch(`/dashboard?date=${addDays(d, -1)}`, ...(d < today() ? [`/dashboard?date=${addDays(d, 1)}`] : []));
       },
     };
   },
@@ -779,19 +780,17 @@ VIEWS.training = {
     const runs = rs.runs.filter(r => r.type === "RUNNING");
     const list = (state.runsOnly ? runs : rs.runs).slice().reverse();
     const smap = byKey(tr.strain), xs = xDates(fr, to, tr.strain), sh = shades(tr.annotations);
-    const km = runs.reduce((s, r) => s + (r.km || 0), 0), mins = runs.reduce((s, r) => s + (r.minutes || 0), 0);
-    const easyBase = runs.filter(r => r.pct_below_vigorous != null);
-    const easy = easyBase.reduce((s, r) => s + r.minutes * r.pct_below_vigorous / 100, 0) / (easyBase.reduce((s, r) => s + r.minutes, 0) || 1) * 100;
+    const rn = rs.running;
     const weeks = tr.weeks;
     const ac = tr.acwr, amap = byKey(ac), ax = xDates(fr, ac.length ? ac[ac.length - 1].date : to, ac);
     return {
       html: `
         <div class="head"><h1>Training</h1><span class="spacer"></span>${rangeSeg()}</div>
         <div class="grid g5">
-          <div class="card"><div class="label">Runs</div><div class="big">${runs.length}</div></div>
-          <div class="card"><div class="label">Distance</div><div class="big">${n1(km)}<small> km</small></div></div>
-          <div class="card"><div class="label">Run time</div><div class="big">${fHM(mins)}</div></div>
-          <div class="card"><div class="label">${hint("easy", "Easy (Z1–Z2)")}</div><div class="big">${easyBase.length ? Math.round(easy) : "–"}<small>%</small></div></div>
+          <div class="card"><div class="label">Runs</div><div class="big">${rn.runs}</div></div>
+          <div class="card"><div class="label">Distance</div><div class="big">${n1(rn.km)}<small> km</small></div></div>
+          <div class="card"><div class="label">Run time</div><div class="big">${fHM(rn.minutes)}</div></div>
+          <div class="card"><div class="label">${hint("easy", "Easy (Z1–Z2)")}</div><div class="big">${rn.easy_pct != null ? Math.round(rn.easy_pct) : "–"}<small>%</small></div></div>
           <div class="card"><div class="label">Workouts</div><div class="big">${rs.runs.length}</div><div class="note">all types</div></div>
         </div>
         <section><div class="card"><div class="chart-title"><h3>${hint("strain", "Daily Strain")}</h3><span class="note">dashed: moderate 10, high 14, all out 18</span>${eventNote(tr.annotations)}</div><div id="c-strain"></div></div></section>
@@ -837,19 +836,10 @@ async function workoutView(id) {
   const a = w.analysis, g = w.google || {}, ms = g.metrics_summary || {}, mob = ms.mobilityMetrics || {};
   // the API also sends day/night annotations (alcohol, illness); only notes on the run itself belong here
   const runAnns = w.annotations.filter(x => (x.target || "").startsWith("workout:"));
-  // Google has four zones; Z3 and Z4 split its vigorous zone at the middle
-  // (about 72 % of heart-rate reserve), so Z5 is Google's peak. Minutes come
-  // from the run analysis; the vigorous minutes are shared out by how the HR
-  // samples fall either side of the split.
-  const gz = s?.zones || {}, split = gz.VIGOROUS && gz.PEAK ? Math.round((gz.VIGOROUS[0] + gz.PEAK[0]) / 2) : null;
-  const vig = (s?.hr || []).filter(p => p.s >= 0 && split && p.bpm >= gz.VIGOROUS[0] && p.bpm < gz.PEAK[0]);
-  const lowVig = vig.length ? vig.filter(p => p.bpm < split).length / vig.length : null;
-  const zones = [["Z1", a.min_light, gz.LIGHT && `< ${gz.MODERATE[0]}`], ["Z2", a.min_moderate, gz.MODERATE && `${gz.MODERATE[0]}–${gz.VIGOROUS[0] - 1}`],
-    ["Z3", a.min_vigorous != null && lowVig != null ? a.min_vigorous * lowVig : null, split && `${gz.VIGOROUS[0]}–${split - 1}`],
-    ["Z4", a.min_vigorous != null && lowVig != null ? a.min_vigorous * (1 - lowVig) : null, split && `${split}–${gz.PEAK[0] - 1}`],
-    ["Z5", a.min_peak, gz.PEAK && `${gz.PEAK[0]}+`]];
-  if (lowVig == null && a.min_vigorous) zones[2][1] = a.min_vigorous;   // no HR samples: all vigorous time shows as Z3
-  const ztot = zones.reduce((t, [, v]) => t + (v || 0), 0);
+  // minutes per zone come from the backend (health_core/zones.py): Z3 and Z4
+  // split Google's vigorous zone in the middle; to_bpm is exclusive
+  const zoneBpm = z => z.from_bpm == null && z.to_bpm == null ? "" : z.from_bpm == null ? `< ${z.to_bpm}`
+    : z.to_bpm == null ? `${z.from_bpm}+` : `${z.from_bpm}–${z.to_bpm - 1}`;
   const pace = a.km && PACED.has(a.type) ? a.minutes * 60 / a.km : null;
   const splitHr = (g.km_splits || []).some(k => k.avg_hr != null);
   // pace, heart rate and cadence share one time axis; walking breaks (cadence
@@ -891,7 +881,7 @@ async function workoutView(id) {
       </div></section>
       <section><div class="grid g3">
         <div class="card"><h3>${hint("zones", "Heart rate zones")}</h3>
-          ${zones.map(([n, v, bpm]) => kv(`${n}${bpm ? ` <span class="note">${bpm} bpm</span>` : ""}`, v != null ? `${n1(v)} min · ${pct(v / (ztot || 1) * 100)}` : "–")).join("")}</div>
+          ${w.hr_zones.zones.map(z => kv(`${z.zone}${zoneBpm(z) ? ` <span class="note">${zoneBpm(z)} bpm</span>` : ""}`, z.minutes != null ? `${n1(z.minutes)} min · ${pct(z.pct)}` : "–")).join("")}</div>
         <div class="card"><h3>Efficiency</h3>
           ${kv(hint("drift", "Aerobic decoupling"), a.decoupling_pct != null ? sgn(a.decoupling_pct, 1) + "%" : "–")}${kv(hint("ef", "Efficiency factor"), n2(a.ef))}
           ${kv(hint("hrr", "HR recovery 60 s"), a.hrr60 != null ? n0(a.hrr60) + " bpm" : "–")}${kv(hint("hrr", "HR recovery 120 s"), a.hrr120 != null ? n0(a.hrr120) + " bpm" : "–")}
@@ -943,12 +933,12 @@ const MONTHLY = [["recovery", "Recovery %", n0], ["hrv_ms", "HRV ms", n1], ["rhr
   ["sleep_performance", "Sleep Performance", n0], ["strain", "Strain", n1], ["steps", "Steps / day", n0], ["vo2max", "VO2 max", n1], ["weight", "Weight kg", n1]];
 const HS_HINT = { vo2max: "vo2max", rhr: "rhr", moderate: "active_min", vigorous: "active_min", sri: "sri" };
 const MONTHLY_HINT = { recovery: "recovery", hrv_ms: "hrv", rhr: "rhr", sleep_performance: "sleep_perf", strain: "strain", vo2max: "vo2max" };
-const KINDS = ["illness", "alcohol", "injury", "travel", "late_meal", "stress", "run_intent", "post_run_protocol", "bad_sleep_env", "note"];
 
 VIEWS.longterm = {
   async load(args) {
     if (args[0] === "vo2max") return vo2View();
-    const lt = await get("/longterm");
+    const [lt, m] = await Promise.all([get("/longterm"), META]);
+    const kinds = m?.annotation.kinds || ["note"];
     const hs = lt.healthspan, variants = Object.keys(hs.variants);
     const v = variants.includes(state.hsVariant) ? state.hsVariant : variants[0];
     const rows = (hs.variants[v] || []);
@@ -987,7 +977,7 @@ VIEWS.longterm = {
               <td>${a.status !== "confirmed" ? `<button class="btn small" data-a="confirm" data-id="${a.id}">Confirm</button> ` : ""}${a.status === "suggested" ? `<button class="btn small" data-a="reject" data-id="${a.id}">Reject</button> ` : ""}<button class="btn small" data-a="delete" data-id="${a.id}">Delete</button></td></tr>`).join("") || '<tr><td colspan="6" class="note">No events.</td></tr>'}
           </table></div>
           <form class="form" id="addev" style="margin-top:12px">
-            <label>Kind<select name="kind">${KINDS.map(k => `<option>${k}</option>`).join("")}</select></label>
+            <label>Kind<select name="kind">${kinds.map(k => `<option>${esc(k)}</option>`).join("")}</select></label>
             <label>From<input type="date" name="start" required max="${today()}"></label>
             <label>To (optional)<input type="date" name="end"></label>
             <label>Note<input name="note" placeholder="what happened"></label>
@@ -1153,7 +1143,9 @@ async function tableView(source, table, q) {
 // ================================================================= sync ====
 
 const syncEl = document.getElementById("sync"), syncText = document.getElementById("sync-text"), syncBtn = document.getElementById("sync-btn");
-const STEP = { mcp_cache: "Google daily data", health_sync: "watch samples", daily_check: "daily check", run_report: "run analysis", weekly_summary: "weekly summary", run_scores: "scores" };
+// a sync step's label and the number of steps a job runs, from /meta
+const stepLabel = name => Object.values(meta?.sync.steps || {}).flat().find(s => s.name === name)?.label || name;
+const stepCount = reason => meta?.sync.steps[reason]?.length;
 let status = null, following = false;
 // the phone top bar mirrors the sidebar's sync state in its dot
 const topDot = document.getElementById("top-dot");
@@ -1206,7 +1198,7 @@ async function followRun(run) {
       const steps = run.steps || [], cur = steps.find(s => s.status === "running");
       const label = run.reason === "recompute" ? "Recomputing scores" : "Syncing";
       paintBusy(run.status === "queued" ? `${label}: waiting for another sync` :
-        `${label}${cur ? " · " + (STEP[cur.name] || cur.name) : ""} (${steps.filter(s => s.status !== "running").length + 1}/${run.reason === "recompute" ? 4 : 6})`);
+        `${label}${cur ? " · " + stepLabel(cur.name) : ""} (${steps.filter(s => s.status !== "running").length + 1}${stepCount(run.reason) ? "/" + stepCount(run.reason) : ""})`);
       await sleep(2500);
       run = await fetchJson(`/sync/${run.id}`);
     }
@@ -1214,7 +1206,7 @@ async function followRun(run) {
   await loadStatus();
   if (run.status !== "ok") {
     syncEl.className = "sync err";
-    const failed = (run.steps || []).filter(s => s.status === "failed").map(s => STEP[s.name] || s.name);
+    const failed = (run.steps || []).filter(s => s.status === "failed").map(s => stepLabel(s.name));
     syncText.textContent = `Sync ${run.status}${failed.length ? ": " + failed.join(", ") : ""}`;
     syncText.title = `${run.error || ""}\n${(run.steps || []).filter(s => s.output_tail).map(s => s.name + ":\n" + s.output_tail).join("\n")}`;
   }
@@ -1233,7 +1225,7 @@ async function waitForOther() {
       if (s && !s.sync_running) { status = s; break; }
       const run = s?.recent_runs?.find(r => r.status === "running");
       const cur = run?.steps?.find(x => x.status === "running");
-      if (cur) paintBusy(`Syncing · ${STEP[cur.name] || cur.name}`);
+      if (cur) paintBusy(`Syncing · ${stepLabel(cur.name)}`);
     }
   } finally { following = false; }
   paintIdle();
