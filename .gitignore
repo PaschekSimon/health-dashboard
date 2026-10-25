@@ -1,0 +1,49 @@
+# --- Data: everything personal lives in data/ --------------------------------
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.bak
+*.bak-*
+*.log
+*.zip
+*.csv
+export/
+takeout/
+takeout_incoming/
+takeout_zips/
+.last_sync
+.sync.lock
+.takeout_state.json
+
+# --- Secrets: Google OAuth client and tokens, keys --------------------------
+client_secret*.json
+google_client.json
+google_tokens.json
+*token*.json
+credentials*.json
+*.pem
+*.key
+*.p12
+.env
+.env.*
+
+# --- A local clone of google-health-mcp (its own repo) -----------------------
+google-health-mcp/
+
+# --- Python and tools ---------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.taste-skill/
+
+# --- Personal notes and docs (kept out of the public repo) ---
+personal/
+
+# --- Local only -----------------------------------------------------------------
+*.lnk
+.claude/
