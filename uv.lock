@@ -229,7 +229,7 @@ wheels = [
 [[package]]
 name = "google-health-mcp"
 version = "1.8.0"
-source = { git = "https://github.com/PaschekSimon/google-health-mcp?branch=simon#2a3ce5c889daa61ec594e5c956535505ff4b8f2e" }
+source = { git = "https://github.com/PaschekSimon/google-health-mcp?branch=simon#b815917193a1d64a600d5cafc4b8034e123433eb" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },

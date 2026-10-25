@@ -1,13 +1,14 @@
-r"""Talk to mcp_server.py over stdio like Claude Desktop does: list tools,
-call every read tool, add and delete a test annotation.
+r"""Talk to the health-app MCP server over stdio like Claude Desktop does: list
+tools, call every read tool, add and delete a test annotation. Uses your real
+data (HEALTH_DATA_DIR or data/).
 
-    .venv\Scripts\python.exe tests\test_mcp.py [--sync]
+    uv run python tests/smoke/test_mcp.py [--sync]
 """
 
 import asyncio
 import json
+import os
 import sys
-from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -18,7 +19,6 @@ def ago(days):
     """An ISO date `days` before today, so the tests follow the data."""
     return (date.today() - timedelta(days=days)).isoformat()
 
-BACKEND = Path(__file__).resolve().parents[1]
 results = []
 
 
@@ -42,8 +42,8 @@ async def call(s, name, args, cond=lambda j: True):
 
 
 async def main():
-    params = StdioServerParameters(command=str(BACKEND / ".venv" / "Scripts" / "python.exe"),
-                                   args=[str(BACKEND / "mcp_server.py")])
+    params = StdioServerParameters(command=sys.executable, args=["-m", "health_dashboard", "mcp"],
+                                   env=dict(os.environ))
     async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
         await s.initialize()
         tools = {t.name for t in (await s.list_tools()).tools}

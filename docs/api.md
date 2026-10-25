@@ -1,7 +1,7 @@
 # API and MCP server
 
-The dashboard in `frontend/` talks to the FastAPI app in `backend/app.py`
-(http://127.0.0.1:8765, this PC only). Interactive docs for every endpoint:
+The dashboard in `frontend/` talks to the FastAPI app in
+`src/health_dashboard/app.py` (`health serve`, http://127.0.0.1:8765, this machine only). Interactive docs for every endpoint:
 http://127.0.0.1:8765/docs.
 
 ## Endpoints
@@ -48,17 +48,18 @@ your data through your browser.
 ## Sync rules
 
 - A sync job runs `google-health-mcp sync` (MCP cache: daily values, sleep,
-  workouts), `health_sync.py` (intraday samples), then `daily_check.py`,
-  `run_report.py`, `weekly_summary.py`, `run_scores.py` (all in `scripts/`). Output goes to `data/logs/sync.log`.
-- Single flight: it holds `data/.sync.lock`, the same lock as `scripts/sync_on_access.py`
+  workouts), `health sync` (intraday samples), then `health daily-check`,
+  `run-report`, `weekly-summary` and `scores`, each as its own process of the
+  same environment. Output goes to `data/logs/sync.log`.
+- Single flight: it holds `data/.sync.lock`, the same lock as `health sync-on-access`
   (e.g. a Claude Code SessionStart hook). If someone else holds it the request
   returns `busy` (or the id of our own running job).
 - `reason=open` is skipped if the last successful full sync (a `sync_runs` row) finished < 15 min ago
-  (`sync_on_access.py`'s `.last_sync` doesn't count: it only runs health_sync.py);
+  (sync-on-access's `.last_sync` doesn't count: it only runs `health sync`);
   `reason=button` always runs.
 - Every run is a row in `sync_runs` (id, reason, started, finished, status, error, origin, steps).
 - Jobs run in a detached process, so they finish even if the server stops.
-- health_sync.py already resumes per type from `sync_state` and re-reads the last
+- `health sync` already resumes per type from `sync_state` and re-reads the last
   2 days (upserts keyed by time + source), so nothing was added there.
 
 ## Annotations
@@ -70,7 +71,7 @@ attrs (JSON), status (suggested / confirmed / rejected), source (you / ai /
 strava / import), confidence, raw_text, note, created_at, updated_at.
 
 Only confirmed ones change numbers, and only kinds listed in
-`scripts/annotation_effects.py` `EFFECTS` (now: illness = every night in the range,
+`src/health_dashboard/analysis/annotation_effects.py` `EFFECTS` (now: illness = every night in the range,
 alcohol = the night after the drinking evening). Adding a kind's effect is one
 entry there.
 
@@ -82,10 +83,12 @@ your scores and record context. Add it to Claude Desktop's
 
 ```json
 "health-app": {
-  "command": "C:\\path\\to\\repo\\backend\\.venv\\Scripts\\python.exe",
-  "args": ["C:\\path\\to\\repo\\backend\\mcp_server.py"]
+  "command": "C:\\path\\to\\repo\\.venv\\Scripts\\python.exe",
+  "args": ["-m", "health_dashboard", "mcp"]
 }
 ```
+
+On Linux the command is `/path/to/repo/.venv/bin/health` with `"args": ["mcp"]`.
 
 Tools: `get_day`, `get_trend`, `list_runs`, `get_run`, `list_annotations`,
 `add_annotation` (confirmed only when the user stated the fact), `delete_annotation`,

@@ -1,6 +1,7 @@
-r"""Hit every endpoint of a running backend (run_backend.ps1 first).
+r"""Hit every endpoint of a running backend (`health serve` first). Uses your
+real data.
 
-    .venv\Scripts\python.exe tests\test_api.py [--sync] [--recompute]
+    uv run python tests/smoke/test_api.py [--sync] [--recompute]
 --sync       also run a real sync (reason=button) and an immediate reason=open
 --recompute  add a confirmed test alcohol annotation, wait for the recompute,
              check the night got excluded, delete it and recompute again
@@ -9,7 +10,7 @@ r"""Hit every endpoint of a running backend (run_backend.ps1 first).
 import sqlite3
 import sys
 import time
-from pathlib import Path
+from health_dashboard.config import get_paths
 
 import httpx
 from datetime import date, timedelta
@@ -83,7 +84,7 @@ check("DELETE /annotations/{id}", c.delete(f"/annotations/{aid}"), cond=lambda j
 check("DELETE /annotations/{id} again", c.delete(f"/annotations/{aid}"), expect=404)
 
 if "--recompute" in sys.argv:
-    db = Path(__file__).resolve().parents[2] / "data" / "health.db"
+    db = get_paths().health_db
     excl = lambda n: sqlite3.connect(db).execute(
         "SELECT excluded_event FROM analysis_daily WHERE night=?", (n,)).fetchone()[0]
     print(f"night {ago(13)} excluded before:", excl(ago(13)))

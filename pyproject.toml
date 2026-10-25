@@ -32,5 +32,8 @@ google-health-mcp = { git = "https://github.com/PaschekSimon/google-health-mcp",
 packages = ["src/health_dashboard"]
 
 [tool.pytest.ini_options]
+# The suite runs on synthetic data (tests/fixture_db.py). tests/smoke/ holds
+# live checks against a running backend and your real data, run by hand.
 testpaths = ["tests"]
-norecursedirs = ["tests/smoke"]  # live checks against a running backend, run by hand
+pythonpath = ["tests"]
+norecursedirs = ["smoke", ".*", "__pycache__"]

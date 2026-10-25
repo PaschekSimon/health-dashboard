@@ -34,8 +34,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import takeout_import  # noqa: E402
+from health_dashboard.sync import takeout_import
 
 WATCH = "Pixel Watch 3"
 START = date(2026, 3, 2)          # a Monday
@@ -55,8 +54,8 @@ UNWORN_DAY = 30                   # watch off 08:00-18:00 (not a full day)
 ZONES = {"LIGHT": (99, 114), "MODERATE": (115, 142), "VIGOROUS": (143, 176), "PEAK": (177, 220)}
 OLD_ZONES = {"LIGHT": (95, 109), "MODERATE": (110, 134), "VIGOROUS": (135, 164), "PEAK": (165, 220)}
 
-# The raw tables of health.db the scores read (DDL as in scripts/health_sync.py,
-# which can't be imported without google_health_mcp).
+# The raw tables of health.db the scores read (a copy of the DDL in
+# sync/health_sync.py, so the fixture doesn't depend on the sync code).
 HEALTH_SCHEMA = """
 CREATE TABLE IF NOT EXISTS hr_samples (
     t INTEGER NOT NULL, utc_offset INTEGER, bpm INTEGER NOT NULL, source TEXT NOT NULL,
