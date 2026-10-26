@@ -1,9 +1,9 @@
 import { createRoot } from "react-dom/client";
-// the old app's fonts, map library and stylesheet, shared until this app replaces it
-import "legacy/vendor/fonts/fonts.css";
-import "legacy/vendor/leaflet/leaflet.css";
-import "legacy/vendor/leaflet/leaflet.js";   // sets window.L for the route map
-import "legacy/style.css";
+// vendored fonts and map library (no CDN), then the stylesheet
+import "./vendor/fonts/fonts.css";
+import "./vendor/leaflet/leaflet.css";
+import "./vendor/leaflet/leaflet.js";   // sets window.L for the route map
+import "./style.css";
 import { App } from "./App";
 import { UiProvider } from "./ui";
 

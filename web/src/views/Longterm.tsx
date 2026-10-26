@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { get, send } from "../api/client";
 import type { AnnotationResult, Ecg, LongtermResponse, Meta } from "../api/types";
 import { EventNote, Kv, Paged, RangeSeg, Table } from "../components/bits";
-import type { ChartConfig } from "legacy/charts.js";
+import type { ChartConfig } from "../lib/charts.js";
 import { Chart } from "../components/Chart";
 import { Hint } from "../components/Hint";
 import { followRun, refresh } from "../sync";

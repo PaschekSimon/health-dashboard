@@ -54,7 +54,26 @@ def test_api_reads_the_data_folder(fixture_data, tmp_path, monkeypatch):
         assert client.get("/status").status_code == 200
         day = client.get("/dashboard", params={"date": str(fixture_data.today)})
         assert day.status_code == 200
-        assert client.get("/app/").status_code == 200
+        assert client.get("/app/").status_code in (200, 503)   # 503: web/ not built (see test_web_app)
         r = client.post("/annotations", json={"kind": "note", "start": str(fixture_data.today), "note": "test"})
         assert r.status_code == 201 and r.json()["recompute"] is None   # a note changes no score
     assert not (tmp_path / "data" / ".sync.lock").exists()
+
+
+def test_web_app(tmp_path):
+    """/app/ serves the built web app, with a hint until it is built; the old
+    /next/ address sends you there."""
+    from fastapi import FastAPI
+
+    from health_dashboard.app import WebApp, app
+    web = FastAPI()
+    web.mount("/app", WebApp(directory=tmp_path / "dist", html=True, check_dir=False))
+    with TestClient(web) as client:
+        r = client.get("/app/")
+        assert r.status_code == 503 and "npm run build" in r.text
+        (tmp_path / "dist").mkdir()
+        (tmp_path / "dist" / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8")
+        r = client.get("/app/")
+        assert r.status_code == 200 and "root" in r.text
+    r = TestClient(app, base_url="http://127.0.0.1").get("/next/", follow_redirects=False)   # no lifespan: no database
+    assert r.status_code in (302, 307) and r.headers["location"] == "/app/"

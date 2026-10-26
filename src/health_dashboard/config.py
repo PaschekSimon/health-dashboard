@@ -3,14 +3,15 @@
 tests.
 
 Defaults fit a checkout of the repo: data in <repo>/data, the web app in
-<repo>/frontend. Environment variables override them:
+<repo>/web/dist (built with `npm run build` in web/). Environment variables
+override them:
 
     HEALTH_DATA_DIR             health.db, logs, settings.json, scores_config.json,
                                 Takeout files and the sync lock
     GOOGLE_HEALTH_MCP_DB_PATH   the google-health MCP's cache (same variable the
                                 MCP itself reads); default
                                 ~/.local/share/google-health-mcp/google_health.db
-    HEALTH_FRONTEND_DIR         the static web app served at /app/
+    HEALTH_FRONTEND_DIR         the built web app served at /app/
 """
 
 import os
@@ -25,7 +26,7 @@ DEFAULT_MCP_DB = Path("~/.local/share/google-health-mcp/google_health.db")
 class Paths:
     data: Path
     mcp_db: Path
-    frontend: Path = REPO / "frontend"
+    frontend: Path = REPO / "web" / "dist"
 
     @property
     def health_db(self) -> Path:
@@ -64,7 +65,7 @@ def get_paths() -> Paths:
     return Paths(
         data=Path(env("HEALTH_DATA_DIR") or REPO / "data").expanduser(),
         mcp_db=Path(env("GOOGLE_HEALTH_MCP_DB_PATH") or DEFAULT_MCP_DB).expanduser(),
-        frontend=Path(env("HEALTH_FRONTEND_DIR") or REPO / "frontend").expanduser(),
+        frontend=Path(env("HEALTH_FRONTEND_DIR") or REPO / "web" / "dist").expanduser(),
     )
 
 

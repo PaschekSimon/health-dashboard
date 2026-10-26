@@ -1,10 +1,10 @@
-// React wrappers around the old app's SVG chart helper (legacy/charts.js).
+// React wrappers around the SVG chart helper (lib/charts.js).
 // The helper draws into a div and redraws itself on resize; these hand it a
 // div React leaves alone and draw again whenever the config object changes,
 // so build configs with useMemo where a view re-renders for other reasons.
 
 import { useLayoutEffect, useRef, type ReactNode } from "react";
-import { chart, hypnogram, route, type ChartConfig, type HypnogramConfig } from "legacy/charts.js";
+import { chart, hypnogram, route, type ChartConfig, type HypnogramConfig } from "../lib/charts.js";
 
 type Drawn = HTMLDivElement & { _ro?: ResizeObserver };
 

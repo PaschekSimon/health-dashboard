@@ -1,16 +1,13 @@
 # API and MCP server
 
-The dashboard in `frontend/` talks to the FastAPI app in
+The dashboard in `web/` talks to the FastAPI app in
 `src/health_dashboard/app.py` (`health serve`, http://127.0.0.1:8765, this machine only). Interactive docs for every endpoint:
 http://127.0.0.1:8765/docs.
 
 Every route has a Pydantic response model (`src/health_dashboard/core/schemas.py`),
 so `/docs` shows each answer's shape and http://127.0.0.1:8765/openapi.json
-describes all of them. TypeScript types can be made from it:
-
-```
-npx openapi-typescript http://127.0.0.1:8765/openapi.json -o api.d.ts
-```
+describes all of them. The web app's TypeScript types are generated from it
+(`npm run gen:types` in `web/`, see web/README.md).
 
 Fields that can be empty are always sent, as `null`. A column a script adds
 later is passed through before the model lists it.
