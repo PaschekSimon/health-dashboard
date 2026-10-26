@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "React + TypeScript port of the health dashboard (frontend/), served at /next/ until it replaces it.",
+  "description": "The health dashboard web app (React + TypeScript), served by the backend at /app/.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

@@ -19,13 +19,11 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import REPO, get_paths
+from .config import get_paths
 from .core import annotations as ann
 from .core import explore, jobs, meta, queries
 from .core import schemas as S
 
-# the React port (web/), once built with `npm run build`; served at /next/ until it replaces /app/
-WEB_NEXT = REPO / "web" / "dist"
 # Windows' registry doesn't always know these, and Chrome wants the right type
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("font/woff2", ".woff2")
@@ -361,11 +359,27 @@ async def revalidate_web(request, call_next):
     """Make the browser re-check the app files on every load, so edits show up
     without a hard refresh (unchanged files still come back as 304)."""
     response = await call_next(request)
-    if request.url.path.startswith(("/app", "/next")):
+    if request.url.path.startswith("/app"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
 
-app.mount("/app", StaticFiles(directory=get_paths().frontend, html=True, check_dir=False), name="web")
-if WEB_NEXT.is_dir():
-    app.mount("/next", StaticFiles(directory=WEB_NEXT, html=True), name="web-next")
+@app.get("/next", include_in_schema=False)
+@app.get("/next/", include_in_schema=False)
+def next_moved():
+    """The React app was tried out at /next/ before it replaced the old one."""
+    return RedirectResponse("/app/")
+
+
+class WebApp(StaticFiles):
+    """The built web app, or a hint instead of an error before the first build."""
+
+    async def __call__(self, scope, receive, send):
+        if not os.path.isdir(self.directory):
+            hint = PlainTextResponse("The web app isn't built yet: in web/ run `npm ci` and `npm run build`, "
+                                     "then reload.", status_code=503)
+            return await hint(scope, receive, send)
+        return await super().__call__(scope, receive, send)
+
+
+app.mount("/app", WebApp(directory=get_paths().frontend, html=True, check_dir=False), name="web")

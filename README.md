@@ -28,7 +28,7 @@ Google Health API ──> google-health-mcp ──> MCP cache (daily values, sle
                                           │
           health scores, daily-check, ... ┘ writes scores into data/health.db
                                           │
-          health serve (FastAPI, :8765) ──┘ reads both, serves frontend/ at /app/
+          health serve (FastAPI, :8765) ──┘ reads both, serves the web app at /app/
 ```
 
 Everything is one Python package, `health_dashboard` (in `src/`), installed
@@ -44,13 +44,13 @@ with [uv](https://docs.astral.sh/uv/) into one environment:
 - `app.py` is the API the dashboard talks to, and `mcp_server.py` an optional
   MCP server so Claude (or another MCP client) can read the same numbers and
   add notes.
-- `frontend/` is plain HTML, CSS and JavaScript. There is no build step.
-- `web/` is the same dashboard ported to React + TypeScript, served at `/next/`
-  until it replaces `frontend/` (build steps in [web/README.md](web/README.md)).
+- `web/` is the dashboard, in React + TypeScript (Vite). Its build is what
+  the backend serves at `/app/` ([web/README.md](web/README.md)).
 
 ## Requirements
 
 - Windows or Linux, with [uv](https://docs.astral.sh/uv/) (it fetches Python 3.13 if needed).
+- [Node.js](https://nodejs.org/) LTS to build the web app (`winget install OpenJS.NodeJS.LTS`).
 - A Google account with Google Health data and your own Google Cloud OAuth
   client (the google-health-mcp README walks you through it).
 
@@ -63,7 +63,14 @@ with [uv](https://docs.astral.sh/uv/) into one environment:
    ```
 
    This creates `.venv` with everything, including google-health-mcp, and the
-   `health` command (`uv run health --help` lists what it can do).
+   `health` command (`uv run health --help` lists what it can do). Then build
+   the web app once (again after each `git pull` that changes `web/`):
+
+   ```
+   cd web
+   npm ci
+   npm run build
+   ```
 
 2. **Authorise Google** (its README has the Google Cloud steps):
 
@@ -124,7 +131,7 @@ Paths come from environment variables, with defaults for a checkout of this repo
 |---|---|---|
 | `HEALTH_DATA_DIR` | `data/` in the repo | `health.db`, settings, score calibration, logs, Takeout, sync lock |
 | `GOOGLE_HEALTH_MCP_DB_PATH` | `~/.local/share/google-health-mcp/google_health.db` | the MCP cache (google-health-mcp reads the same variable) |
-| `HEALTH_FRONTEND_DIR` | `frontend/` in the repo | the web app |
+| `HEALTH_FRONTEND_DIR` | `web/dist/` in the repo | the built web app |
 | `HEALTH_ALLOWED_HOSTS` | | extra host names the API answers to (see below) |
 
 ### Phone access (optional)
@@ -190,8 +197,8 @@ src/health_dashboard/
   core/                   queries, sync jobs, annotations (shared by the API and the MCP server)
   sync/                   Google sync, sync-on-access, Takeout import
   analysis/, scores/      baselines, daily check, run and weekly reports; Strain, Recovery, Sleep, Healthspan
-frontend/   the dashboard (index.html, app.js, charts.js, style.css), vendor/ (Leaflet, fonts), app icons
-web/        the React + TypeScript port of the dashboard (Vite), served at /next/
+web/        the dashboard (React + TypeScript, Vite): src/ (views, charts.js, style.css, vendored
+            Leaflet and fonts), public/ (manifest, app icons); the build in dist/ is not committed
 docs/       scores.md (how the scores work), api.md (endpoints, MCP tools)
 tests/      pytest suite on synthetic data, golden/scores.json (the expected scores), smoke/ (live checks)
 data/       your data, created on first sync, never committed
