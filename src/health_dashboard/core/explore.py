@@ -15,7 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from . import annotations as ann
 from . import zones
-from .queries import _all, _annotations_by_date, _d, _one, _range, _round, short_id
+from .queries import _all, _annotations_by_date, _d, _from_watch, _one, _range, _round, short_id
 
 LOCAL_DAY = "date({c} + coalesce(utc_offset, 0), 'unixepoch')"
 EPOCH_COLS = ("t", "t_start", "t_end", "sleep_start", "sleep_end")
@@ -48,6 +48,7 @@ def _local(t, off):
 
 def activity(db, date_from=None, date_to=None):
     fr, to = _range(date_from, date_to)
+    fr = _from_watch(db, fr)
     lo, hi = _span(fr, to)
     days = {}
 
@@ -341,7 +342,7 @@ def longterm(db):
         acc = {}
         for r in rows:
             d, v = list(r.values())[:2]
-            if d and v is not None:
+            if d and d >= db.watch_start and v is not None:
                 acc.setdefault(d[:7], []).append(v)
         monthly[metric] = [{"month": m, "mean": round(sum(v) / len(v), 2), "n": len(v)} for m, v in sorted(acc.items())]
     vo2 = [_round(r, 2) for r in _all(db.m, "SELECT date, vo2_max, cardio_fitness_level FROM cardio_fitness "
