@@ -1223,7 +1223,9 @@ async function waitForOther() {
       await sleep(5000);
       const s = await fetchJson("/status").catch(() => null);
       if (s && !s.sync_running) { status = s; break; }
-      const run = s?.recent_runs?.find(r => r.status === "running");
+      // recent_runs has no steps, so ask for the running job itself
+      const id = s?.recent_runs?.find(r => r.status === "running")?.id;
+      const run = id != null ? await fetchJson(`/sync/${id}`).catch(() => null) : null;
       const cur = run?.steps?.find(x => x.status === "running");
       if (cur) paintBusy(`Syncing · ${stepLabel(cur.name)}`);
     }

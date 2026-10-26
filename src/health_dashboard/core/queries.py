@@ -300,7 +300,7 @@ def dashboard(db, day=None):
     sleep_g, sleep_p = _sleep_row(db, ds)
     strain = _one(db.h, "SELECT date, strain, band, load, minutes_counted, partial FROM score_strain_daily "
                         "WHERE date = ?", (ds,))
-    act = _one(db.m, "SELECT steps, distance_km, active_minutes FROM activity WHERE date = ?", (ds,))
+    act = _one(db.m, "SELECT steps, distance_km, active_minutes, floors FROM activity WHERE date = ?", (ds,))
     # watch steps from the intraday table: fresher than the MCP's daily value
     watch_steps = _one(db.h, "SELECT sum(steps) n FROM steps_minute WHERE source = ? AND "
                              "date(t_start + coalesce(utc_offset, 0), 'unixepoch') = ?", (db.watch, ds))

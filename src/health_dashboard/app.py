@@ -19,11 +19,13 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config import get_paths
+from .config import REPO, get_paths
 from .core import annotations as ann
 from .core import explore, jobs, meta, queries
 from .core import schemas as S
 
+# the React port (web/), once built with `npm run build`; served at /next/ until it replaces /app/
+WEB_NEXT = REPO / "web" / "dist"
 # Windows' registry doesn't always know these, and Chrome wants the right type
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("font/woff2", ".woff2")
@@ -359,9 +361,11 @@ async def revalidate_web(request, call_next):
     """Make the browser re-check the app files on every load, so edits show up
     without a hard refresh (unchanged files still come back as 304)."""
     response = await call_next(request)
-    if request.url.path.startswith("/app"):
+    if request.url.path.startswith(("/app", "/next")):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
 
 app.mount("/app", StaticFiles(directory=get_paths().frontend, html=True, check_dir=False), name="web")
+if WEB_NEXT.is_dir():
+    app.mount("/next", StaticFiles(directory=WEB_NEXT, html=True), name="web-next")

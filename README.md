@@ -45,6 +45,8 @@ with [uv](https://docs.astral.sh/uv/) into one environment:
   MCP server so Claude (or another MCP client) can read the same numbers and
   add notes.
 - `frontend/` is plain HTML, CSS and JavaScript. There is no build step.
+- `web/` is the same dashboard ported to React + TypeScript, served at `/next/`
+  until it replaces `frontend/` (build steps in [web/README.md](web/README.md)).
 
 ## Requirements
 
@@ -189,6 +191,7 @@ src/health_dashboard/
   sync/                   Google sync, sync-on-access, Takeout import
   analysis/, scores/      baselines, daily check, run and weekly reports; Strain, Recovery, Sleep, Healthspan
 frontend/   the dashboard (index.html, app.js, charts.js, style.css), vendor/ (Leaflet, fonts), app icons
+web/        the React + TypeScript port of the dashboard (Vite), served at /next/
 docs/       scores.md (how the scores work), api.md (endpoints, MCP tools)
 tests/      pytest suite on synthetic data, golden/scores.json (the expected scores), smoke/ (live checks)
 data/       your data, created on first sync, never committed

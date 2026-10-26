@@ -10,6 +10,7 @@
     health daily-check | run-report | weekly-summary | baseline
     health scores [--recalibrate] [--retune]   Strain, Recovery, Sleep, Healthspan
     health strain | recovery | healthspan       one score
+    health openapi                       print the API's OpenAPI schema (web/ types)
 
 Every command reads its paths from the environment (HEALTH_DATA_DIR, ...,
 see config.py). Each runs its module's main(argv), so
@@ -35,6 +36,7 @@ COMMANDS = {  # command -> module with main(argv)
     "strain": "scores.strain",
     "recovery": "scores.recovery",
     "healthspan": "scores.healthspan",
+    "openapi": "openapi",
 }
 
 
