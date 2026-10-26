@@ -48,6 +48,17 @@ Until the switch, the chart helper (`charts.js`), `style.css` and the
 vendored fonts and Leaflet are imported from `../frontend` (the `legacy`
 alias in `vite.config.ts`), so a style fix shows in both apps.
 
-The response types in `src/api/types.ts` are written by hand for now; they
-will be generated from the backend's OpenAPI schema with openapi-typescript
-once the backend has typed responses.
+## API types
+
+`src/api/schema.d.ts` is generated from the backend's response models
+(`/openapi.json`) with openapi-typescript; `src/api/types.ts` gives its
+shapes short names. After changing a response model in
+`backend/health_core/schemas.py`, regenerate it with the backend running and
+commit the result:
+
+```
+npm run gen:types
+```
+
+`npm run typecheck` then shows every place the app needs to follow the
+change. CI fails when the committed file no longer matches the backend.

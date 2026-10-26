@@ -2,10 +2,10 @@ name: web
 
 on:
   pull_request:
-    paths: ["web/**", "frontend/**", ".github/workflows/web.yml"]
+    paths: ["web/**", "frontend/**", "backend/**", ".github/workflows/web.yml"]
   push:
     branches: [master]
-    paths: ["web/**", "frontend/**", ".github/workflows/web.yml"]
+    paths: ["web/**", "frontend/**", "backend/**", ".github/workflows/web.yml"]
 
 jobs:
   build:
@@ -20,5 +20,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install fastapi
       - run: npm ci
+      # the committed API types must match the backend's response models
+      - name: API types up to date
+        run: |
+          python ../backend/export_openapi.py > "$RUNNER_TEMP/openapi.json"
+          npx openapi-typescript "$RUNNER_TEMP/openapi.json" -o src/api/schema.d.ts
+          git diff --exit-code src/api/schema.d.ts || { echo "::error::src/api/schema.d.ts is out of date: run npm run gen:types with the backend running and commit it"; exit 1; }
       - run: npm run build   # typecheck + bundle

@@ -35,12 +35,13 @@ export function Hypnogram({ id, cfg }: { id?: string; cfg: HypnogramConfig }) {
 }
 
 // Leaflet keeps state on its container, so each route gets a fresh one.
-export function Route({ pts }: { pts: [number, number][] }) {
+// pts: [lat, lon] pairs
+export function Route({ pts }: { pts: number[][] }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const box = document.createElement("div");
     ref.current!.appendChild(box);
-    route(box, pts);
+    route(box, pts as [number, number][]);
     return () => box.remove();
   }, [pts]);
   return <div id="c-route" ref={ref} />;

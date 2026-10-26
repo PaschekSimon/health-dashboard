@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, type ReactNode } from "react";
 import { get, prefetch } from "../api/client";
-import type { ExplainError, ExplainSleep, Night as NightRow, SleepResponse, TrendResponse } from "../api/types";
+import type { ExplainSleep, Night as NightRow, SleepResponse, TrendResponse } from "../api/types";
 import { Kv, Paged, RangeSeg } from "../components/bits";
 import { Chart, ChartBox, Hypnogram, Legend } from "../components/Chart";
 import { Hint } from "../components/Hint";
@@ -108,21 +108,24 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
 
 async function loadNight(d: string) {
   const [sl, e] = await Promise.all([get<SleepResponse>(nightPaths(d)[0]),
-    get<ExplainSleep | ExplainError>(nightPaths(d)[1]).catch((err: Error) => ({ error: err.message }) as ExplainError)]);
+    get<ExplainSleep>(nightPaths(d)[1]).catch((err: Error): Ex => ({ error: err.message }))]);
   return <Night d={d} sl={sl} e={e} />;
 }
 
-function Night({ d, sl, e }: { d: string; sl: SleepResponse; e: ExplainSleep | ExplainError }) {
+// the explanation, or only its error when the request itself failed
+type Ex = Partial<ExplainSleep> & { error: string | null };
+
+function Night({ d, sl, e }: { d: string; sl: SleepResponse; e: Ex }) {
   const i = sl.nights.findIndex(r => r.night === d);
   const r = sl.nights[i], g = r?.google || {} as Partial<NonNullable<NightRow["google"]>>, p = r?.performance || {} as Partial<NonNullable<NightRow["performance"]>>;
-  const ok = !e.error ? e as ExplainSleep : null, N = ok?.need;
+  const ok = !e.error ? e : null, N = ok?.need;
   const prev = i > 0 ? sl.nights[i - 1].night : (i < 0 ? sl.nights.filter(x => x.night < d).pop()?.night : null);
   const next = i >= 0 ? sl.nights[i + 1]?.night : sl.nights.find(x => x.night > d)?.night;
   const before = sl.nights.filter(x => x.night < d && x.google);
   const avg = (k: StageKey | "total_minutes") => before.length ? mean(before.map(x => x.google![k]).filter(v => v != null)) : null;
   const inBed = STAGES.reduce((t, [, k]) => t + (g[k] || 0), 0);
   const asleep = p.asleep_min ?? g.total_minutes;
-  const hyp = ok?.hypnogram ?? (e as ExplainError).hypnogram ?? null;
+  const hyp = e.hypnogram ?? null;
   // the night an annotation lands on (alcohol: the night after the evening)
   const anns = sl.annotations.filter(a => a.status !== "rejected" && (a.target === `night:${d}` || (!a.target && (a.excludes_nights || [] as string[]).includes(d))));
   const go = (n: string | null | undefined) => { if (n) location.hash = `#/sleep/${n}`; };
@@ -148,14 +151,14 @@ function Night({ d, sl, e }: { d: string; sl: SleepResponse; e: ExplainSleep | E
         <div className="cols">
           <div style={{ flex: 1, minWidth: 240 }}><div className="tablewrap"><table><tbody>
             <tr><th>Part</th><th className="num">Score</th><th className="num">Points</th></tr>
-            {Object.entries(ok.components).map(([k, c]) => (
+            {Object.entries(ok.components || {}).map(([k, c]) => (
               <tr key={k}><td><Hint k={k}>{k[0].toUpperCase() + k.slice(1)}</Hint></td><td className="num">{n1(c.value)}</td><td className="num">{n1(c.contribution)}</td></tr>
             ))}
           </tbody></table></div></div>
           <div style={{ flex: 1, minWidth: 220 }}>
-            <Kv k="Asleep">{fHM(ok.asleep_min)}</Kv><Kv k={<Hint k="need">Need</Hint>}>{fHM(ok.need.total_min)}</Kv>
-            <Kv k="· baseline">{fHM(ok.need.baseline_min)}</Kv><Kv k="· from strain">{"+" + fHM(ok.need.from_strain_min)}</Kv>
-            <Kv k="· from sleep debt">{"+" + fHM(ok.need.from_sleep_debt_min)}</Kv><Kv k="· minus naps">{"−" + fHM(ok.need.minus_naps_min)}</Kv>
+            <Kv k="Asleep">{fHM(ok.asleep_min)}</Kv><Kv k={<Hint k="need">Need</Hint>}>{fHM(N?.total_min)}</Kv>
+            <Kv k="· baseline">{fHM(N?.baseline_min)}</Kv><Kv k="· from strain">{"+" + fHM(N?.from_strain_min)}</Kv>
+            <Kv k="· from sleep debt">{"+" + fHM(N?.from_sleep_debt_min)}</Kv><Kv k="· minus naps">{"−" + fHM(N?.minus_naps_min)}</Kv>
           </div>
         </div>
       )}</div></section>

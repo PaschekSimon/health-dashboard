@@ -2,32 +2,25 @@
 // target, steps and this week's running. #/dashboard/<date>, today by default.
 
 import { get, prefetch } from "../api/client";
-import type { DashboardResponse, RunsResponse } from "../api/types";
+import type { DashboardResponse } from "../api/types";
 import { Kv, Ring } from "../components/bits";
 import { Hint } from "../components/Hint";
-import { STEP_GOAL, addDays, fClock, fDay, fHM, mondayOf, n0, n1, pct, today } from "../lib/format";
+import { STEP_GOAL, addDays, fClock, fDay, fHM, n0, n1, pct, today } from "../lib/format";
 
 const ZN: Record<string, string> = { rhr: "resting HR", ln_rmssd: "HRV", nrem_hr: "non-REM HR", breathing: "breathing rate",
   skin_temp: "skin temperature", sleep_min: "sleep time", steps: "steps" };
 
-const weekRuns = (mon: string) => `/runs?from=${mon}&to=${addDays(mon, 6)}`;
-
 export async function loadDashboard(args: string[]) {
   const d = args[0] || today();
-  const [dash, week] = await Promise.all([get<DashboardResponse>(`/dashboard?date=${d}`), get<RunsResponse>(weekRuns(mondayOf(d)))]);
-  const pm = mondayOf(addDays(d, -1));
-  prefetch(`/dashboard?date=${addDays(d, -1)}`, weekRuns(pm),
-    ...(d < today() ? [`/dashboard?date=${addDays(d, 1)}`, weekRuns(mondayOf(addDays(d, 1)))] : []));
-  return <Dashboard d={d} dash={dash} week={week} />;
+  const dash = await get<DashboardResponse>(`/dashboard?date=${d}`);
+  prefetch(`/dashboard?date=${addDays(d, -1)}`, ...(d < today() ? [`/dashboard?date=${addDays(d, 1)}`] : []));
+  return <Dashboard d={d} dash={dash} />;
 }
 
-function Dashboard({ d, dash, week }: { d: string; dash: DashboardResponse; week: RunsResponse }) {
+function Dashboard({ d, dash }: { d: string; dash: DashboardResponse }) {
   const rec = dash.recovery, sp = dash.sleep.performance, sg = dash.sleep.google;
-  const st = dash.strain.today, tgt = dash.strain.target, act = dash.google_daily_activity || { distance_km: null, floors: null };
+  const st = dash.strain.today, tgt = dash.strain.target, act = dash.google_daily_activity;
   const rw = dash.running_week;
-  const easyMin = week.runs.reduce((s, r) => s + (r.pct_below_vigorous != null ? r.minutes * r.pct_below_vigorous / 100 : 0), 0);
-  const easyBase = week.runs.reduce((s, r) => s + (r.pct_below_vigorous != null ? r.minutes : 0), 0);
-  const easy = rw.easy_pct !== undefined ? rw.easy_pct : easyBase ? easyMin / easyBase * 100 : null;
   const dc = dash.daily_check;
   const isToday = d === today();
   const go = (x: string) => { location.hash = `#/dashboard/${x}`; };
@@ -44,7 +37,7 @@ function Dashboard({ d, dash, week }: { d: string; dash: DashboardResponse; week
     <a className="card score hero" href="#/recovery">
       <div className="label"><Hint k="recovery">Recovery</Hint></div>
       <div className="top">
-        <Ring value={rec.recovery} max={100} cls={rec.band}><div className="big">{Math.round(rec.recovery)}<small>%</small></div></Ring>
+        <Ring value={rec.recovery} max={100} cls={rec.band ?? undefined}><div className="big">{rec.recovery != null ? Math.round(rec.recovery) : "–"}<small>%</small></div></Ring>
         <div className="side-kv">
           <Kv k={<Hint k="hrv">HRV</Hint>}>{n0(rec.google_rmssd ?? rec.hrv_ms) + " ms"}</Kv>
           <Kv k={<Hint k="rhr">Resting HR</Hint>}>{n0(rec.rhr) + " bpm"}</Kv>
@@ -101,8 +94,8 @@ function Dashboard({ d, dash, week }: { d: string; dash: DashboardResponse; week
       <div className="meter"><i style={{ width: `${Math.min(100, (steps || 0) / STEP_GOAL * 100)}%` }} /></div>
       <div className="kvs">
         <Kv k="Goal">{n0(STEP_GOAL)}</Kv>
-        <Kv k="Distance">{act.distance_km != null ? n1(act.distance_km) + " km" : "–"}</Kv>
-        <Kv k="Floors">{n0(act.floors)}</Kv>
+        <Kv k="Distance">{act?.distance_km != null ? n1(act.distance_km) + " km" : "–"}</Kv>
+        <Kv k="Floors">{n0(act?.floors)}</Kv>
       </div>
     </a>
   );
@@ -114,7 +107,7 @@ function Dashboard({ d, dash, week }: { d: string; dash: DashboardResponse; week
       <div className="kvs">
         <Kv k="Runs">{rw.runs}</Kv>
         <Kv k="Time">{fHM(rw.minutes)}</Kv>
-        <Kv k={<Hint k="easy">Easy (Z1–Z2)</Hint>}>{easy != null ? pct(easy) + " of run time" : "–"}</Kv>
+        <Kv k={<Hint k="easy">Easy (Z1–Z2)</Hint>}>{rw.easy_pct != null ? pct(rw.easy_pct) + " of run time" : "–"}</Kv>
       </div>
     </a>
   );

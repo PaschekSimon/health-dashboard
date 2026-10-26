@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { get } from "../api/client";
-import type { ExplainError, ExplainRecovery, RecoveryDay, RecoveryResponse, TrendPoint, TrendResponse } from "../api/types";
+import type { ExplainRecovery, RecoveryDay, RecoveryResponse, TrendPoint, TrendResponse } from "../api/types";
 import { BandDot, EventNote, Kv, Paged, RangeSeg } from "../components/bits";
 import { Chart, ChartBox } from "../components/Chart";
 import { Hint } from "../components/Hint";
@@ -56,7 +56,7 @@ function Recovery({ fr, to, rec, nrem }: { fr: string; to: string; rec: Recovery
     const sh = shades(rec.annotations);
     const recCfg = {
       x: xs, height: 190, y: { min: 0, max: 100, ticks: [0, 33, 66, 100], fmt: (v: number) => v + "%" }, shades: sh, xfmt: fShort, tipx: fDay,
-      series: [{ name: "Recovery", type: "bar" as const, data: pick(xs, map, r => r.recovery), colors: xs.map(d => map[d] ? COLORS[map[d].band] : null), fmt: pct }],
+      series: [{ name: "Recovery", type: "bar" as const, data: pick(xs, map, r => r.recovery), colors: xs.map(d => map[d]?.band ? COLORS[map[d].band!] : null), fmt: pct }],
       onClick: (i: number) => { if (map[xs[i]]) show(xs[i]); },
     };
     const sigCfg = Object.fromEntries(sig.map(([k, , f, u, , src]) => {
@@ -76,7 +76,7 @@ function Recovery({ fr, to, rec, nrem }: { fr: string; to: string; rec: Recovery
       <div className="head"><h1>Recovery</h1><span className="spacer" /><RangeSeg /></div>
       <div className="card">
         <div className="chart-title"><h3><Hint k="recovery">Recovery</Hint></h3><EventNote anns={rec.annotations} />
-          <span className="now">{last ? <><BandDot band={last.band} />{Math.round(last.recovery) + "%"}</> : ""}</span></div>
+          <span className="now">{last ? <><BandDot band={last.band} />{pct(last.recovery)}</> : ""}</span></div>
         <Chart id="c-rec" cfg={charts.recCfg} /><div className="note">Click a day to see why.</div>
       </div>
       <div id="explain" style={{ marginTop: 16 }} ref={box}>{day ? <Explain key={day.n} date={day.d} /> : null}</div>
@@ -94,7 +94,7 @@ function Recovery({ fr, to, rec, nrem }: { fr: string; to: string; rec: Recovery
           <th><Hint k="check">Check</Hint></th><th><Hint k="hrv_status">HRV status</Hint></th></tr>}
           rows={rows.map(r => (
             <tr key={r.date} className="click" data-d={r.date} onClick={() => show(r.date)}>
-              <td>{fDay(r.date)}</td><td className="num"><BandDot band={r.band} />{`${Math.round(r.recovery)}%`}</td><td className="num">{n1(r.google_rmssd ?? r.hrv_ms)}</td>
+              <td>{fDay(r.date)}</td><td className="num"><BandDot band={r.band} />{pct(r.recovery)}</td><td className="num">{n1(r.google_rmssd ?? r.hrv_ms)}</td>
               <td className="num">{n1(r.deep_hrv_ms)}</td><td className="num">{n0(r.rhr)}</td><td className="num">{n1(r.breathing)}</td><td className="num">{n1(r.spo2)}</td>
               <td className="num">{sgn(r.skin_rel)}</td><td className="num">{pct(r.sleep_performance)}</td><td>{r.daily_check_flag || ""}</td><td>{r.hrv_status || ""}</td>
             </tr>
@@ -106,29 +106,30 @@ function Recovery({ fr, to, rec, nrem }: { fr: string; to: string; rec: Recovery
 
 // one day's Recovery broken into its signals
 function Explain({ date }: { date: string }) {
-  const [e, setE] = useState<ExplainRecovery | ExplainError | null>(null);
+  const [e, setE] = useState<ExplainRecovery | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { get<ExplainRecovery | ExplainError>(`/explain/recovery?date=${date}`).then(setE, x => setErr(x.message)); }, [date]);
+  useEffect(() => { get<ExplainRecovery>(`/explain/recovery?date=${date}`).then(setE, x => setErr(x.message)); }, [date]);
   if (err) return <div className="note">{err}</div>;
   if (!e) return <div className="note">Loading…</div>;
   if (e.error) return <div className="note">{e.error}</div>;
-  const x = e as ExplainRecovery;
+  const x = e, raw = x.raw || {};
+  const num = (k: string) => { const v = raw[k]; return typeof v === "number" ? v : null; };
   return (
-    <div className="panel"><h3>{`${fDay(date)}: `}<BandDot band={x.band} />{`${Math.round(x.value)}% recovery`}</h3>
+    <div className="panel"><h3>{`${fDay(date)}: `}<BandDot band={x.band} />{`${pct(x.value)} recovery`}</h3>
       <p className="note">Each signal is compared with your own baseline (last {n0(x.baseline_n)} nights, illness and alcohol nights left out).</p>
       <div className="tablewrap"><table><tbody>
         <tr><th>Signal</th><th className="num"><Hint k="z">vs. normal (z)</Hint></th><th className="num">Weight</th><th className="num"><Hint k="contribution">Contribution</Hint></th></tr>
-        {Object.entries(x.components).map(([k, c]) => (
+        {Object.entries(x.components || {}).map(([k, c]) => (
           <tr key={k}><td><Hint k={PART_HINT[k] || k}>{REC_PARTS[k] || k}</Hint></td><td className="num">{sgn(c.z)}</td><td className="num">{c.weight ?? "–"}</td><td className="num">{sgn(c.contribution, 3)}</td></tr>
         ))}
       </tbody></table></div>
       <div className="cols" style={{ marginTop: 10 }}>
-        <Kv k="HRV used">{n1(x.raw.hrv_ms) + " ms (" + (HRV_SRC[x.raw.hrv_source || ""] || x.raw.hrv_source || "") + ")"}</Kv>
-        <Kv k="Deep-sleep HRV">{n1(x.raw.deep_hrv_ms) + " ms (not used)"}</Kv>
-        <Kv k="Resting HR">{n0(x.raw.rhr)}</Kv>
-        <Kv k="Breathing">{n1(x.raw.breathing)}</Kv>
-        <Kv k="SpO2">{n1(x.raw.spo2) + "%"}</Kv>
-        <Kv k="Skin temp">{sgn(x.raw.skin_rel) + " °C"}</Kv>
+        <Kv k="HRV used">{n1(num("hrv_ms")) + " ms (" + (HRV_SRC[String(raw.hrv_source || "")] || raw.hrv_source || "") + ")"}</Kv>
+        <Kv k="Deep-sleep HRV">{n1(num("deep_hrv_ms")) + " ms (not used)"}</Kv>
+        <Kv k="Resting HR">{n0(num("rhr"))}</Kv>
+        <Kv k="Breathing">{n1(num("breathing"))}</Kv>
+        <Kv k="SpO2">{n1(num("spo2")) + "%"}</Kv>
+        <Kv k="Skin temp">{sgn(num("skin_rel")) + " °C"}</Kv>
       </div>
       {x.penalty ? <p className="note">Penalty {x.penalty}{x.flags ? " · " + x.flags : ""}</p> : null}
       {x.provisional ? <p className="note">Provisional: the baseline is still short.</p> : null}

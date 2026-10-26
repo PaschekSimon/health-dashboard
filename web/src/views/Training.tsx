@@ -25,9 +25,7 @@ function Training({ fr, to, rs, tr }: { fr: string; to: string; rs: RunsResponse
   const [ui, setUi] = useUi();
   const runs = rs.runs.filter(r => r.type === "RUNNING");
   const list = (ui.runsOnly ? runs : rs.runs).slice().reverse();
-  const km = runs.reduce((s, r) => s + (r.km || 0), 0), mins = runs.reduce((s, r) => s + (r.minutes || 0), 0);
-  const easyBase = runs.filter(r => r.pct_below_vigorous != null);
-  const easy = easyBase.reduce((s, r) => s + r.minutes * r.pct_below_vigorous! / 100, 0) / (easyBase.reduce((s, r) => s + r.minutes, 0) || 1) * 100;
+  const sum = rs.running;
   const weeks = tr.weeks, ac = tr.acwr;
   const open = (id: string) => { location.hash = `#/training/w/${id}`; };
 
@@ -39,7 +37,7 @@ function Training({ fr, to, rs, tr }: { fr: string; to: string; rs: RunsResponse
         refs: [{ y: 10 }, { y: 14 }, { y: 18 }],
         series: [{ name: "Strain", type: "bar" as const, data: pick(xs, smap, r => r.strain), fmt: n1 }] },
       load: { x: weeks.map(w => w.monday), height: 170, xfmt: fShort, tipx: fWeek, series: [
-        { name: "TRIMP / 7", type: "bar" as const, color: "var(--line)", data: weeks.map(w => w.trimp / 7), fmt: n1 },
+        { name: "TRIMP / 7", type: "bar" as const, color: "var(--line)", data: weeks.map(w => w.trimp != null ? w.trimp / 7 : null), fmt: n1 },
         { name: "Fitness", type: "line" as const, data: weeks.map(w => w.fitness), fmt: n1 },
         { name: "Fatigue", type: "line" as const, color: "var(--ink-2)", data: weeks.map(w => w.fatigue), fmt: n1 }] },
       acwr: { x: ax, height: 170, band: { lo: 0.8, hi: 1.3 }, xfmt: fShort, tipx: fDay,
@@ -51,10 +49,10 @@ function Training({ fr, to, rs, tr }: { fr: string; to: string; rs: RunsResponse
     <>
       <div className="head"><h1>Training</h1><span className="spacer" /><RangeSeg /></div>
       <div className="grid g5">
-        <div className="card"><div className="label">Runs</div><div className="big">{runs.length}</div></div>
-        <div className="card"><div className="label">Distance</div><div className="big">{n1(km)}<small> km</small></div></div>
-        <div className="card"><div className="label">Run time</div><div className="big">{fHM(mins)}</div></div>
-        <div className="card"><div className="label"><Hint k="easy">Easy (Z1–Z2)</Hint></div><div className="big">{easyBase.length ? Math.round(easy) : "–"}<small>%</small></div></div>
+        <div className="card"><div className="label">Runs</div><div className="big">{sum.runs}</div></div>
+        <div className="card"><div className="label">Distance</div><div className="big">{n1(sum.km)}<small> km</small></div></div>
+        <div className="card"><div className="label">Run time</div><div className="big">{fHM(sum.minutes)}</div></div>
+        <div className="card"><div className="label"><Hint k="easy">Easy (Z1–Z2)</Hint></div><div className="big">{sum.easy_pct != null ? Math.round(sum.easy_pct) : "–"}<small>%</small></div></div>
         <div className="card"><div className="label">Workouts</div><div className="big">{rs.runs.length}</div><div className="note">all types</div></div>
       </div>
       <section><div className="card"><div className="chart-title"><h3><Hint k="strain">Daily Strain</Hint></h3><span className="note">dashed: moderate 10, high 14, all out 18</span><EventNote anns={tr.annotations} /></div>
@@ -70,7 +68,7 @@ function Training({ fr, to, rs, tr }: { fr: string; to: string; rs: RunsResponse
           rows={list.length ? list.map(r => (
             <tr key={r.id} className="click" data-id={r.id} onClick={() => open(r.id)}>
               <td>{fDay(r.date)}</td><td>{typeName(r.type)}</td><td>{r.name}</td><td className="num">{fHM(r.minutes)}</td><td className="num">{r.km ? n2(r.km) : "–"}</td>
-              <td className="num">{r.km && PACED.has(r.type) ? fPace(r.minutes * 60 / r.km) : "–"}</td><td className="num">{n0(r.avg_hr)}</td><td className="num">{pct(r.pct_below_vigorous)}</td>
+              <td className="num">{r.km && r.minutes != null && PACED.has(r.type) ? fPace(r.minutes * 60 / r.km) : "–"}</td><td className="num">{n0(r.avg_hr)}</td><td className="num">{pct(r.pct_below_vigorous)}</td>
               <td className="num">{r.decoupling_pct != null ? sgn(r.decoupling_pct, 1) + "%" : "–"}</td><td className="num">{n2(r.ef)}</td><td className="num">{n0(r.trimp)}</td><td className="num">{n1(r.strain)}</td>
             </tr>
           )) : [<tr key="none"><td colSpan={12} className="note">No workouts in this range.</td></tr>]} />
@@ -111,26 +109,23 @@ const PACE_SRC: Record<string, string> = { watch: "from the watch's distance", g
 const CAD_SRC: Record<string, string> = { watch: "30 s averages", "steps per minute": "watch steps per minute" };
 const fT = (v: number) => `${Math.floor(v / 60)}:${pad2(Math.round(v % 60))}`;
 
+// the parts of Google's metrics summary shown here (the API passes it on as is)
+interface MetricsSummary {
+  elevationGainMillimeters?: number;
+  mobilityMetrics?: { avgCadenceStepsPerMinute?: number; avgStrideLengthMillimeters?: number; avgVerticalOscillationMillimeters?: number;
+    avgVerticalRatio?: number; avgGroundContactTimeDuration?: string };
+}
+
 function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
-  const a = w.analysis, g = w.google, ms = g?.metrics_summary || {}, mob = ms.mobilityMetrics || {};
+  const a = w.analysis, g = w.google, ms: MetricsSummary = g?.metrics_summary || {}, mob = ms.mobilityMetrics || {};
   // the API also sends day/night annotations (alcohol, illness); only notes on the run itself belong here
   const runAnns = w.annotations.filter(x => (x.target || "").startsWith("workout:"));
-  // Google has four zones; Z3 and Z4 split its vigorous zone at the middle
-  // (about 72 % of heart-rate reserve), so Z5 is Google's peak. Minutes come
-  // from the run analysis; the vigorous minutes are shared out by how the HR
-  // samples fall either side of the split.
-  const gz = s?.zones || {}, split = gz.VIGOROUS && gz.PEAK ? Math.round((gz.VIGOROUS[0] + gz.PEAK[0]) / 2) : null;
-  const vig = (s?.hr || []).filter(p => p.s >= 0 && split && p.bpm >= gz.VIGOROUS[0] && p.bpm < gz.PEAK[0]);
-  const lowVig = vig.length ? vig.filter(p => p.bpm < split!).length / vig.length : null;
-  const zones: [string, number | null, string | null][] = [
-    ["Z1", a.min_light, gz.LIGHT && gz.MODERATE ? `< ${gz.MODERATE[0]}` : null],
-    ["Z2", a.min_moderate, gz.MODERATE && gz.VIGOROUS ? `${gz.MODERATE[0]}–${gz.VIGOROUS[0] - 1}` : null],
-    ["Z3", a.min_vigorous != null && lowVig != null ? a.min_vigorous * lowVig : null, split ? `${gz.VIGOROUS[0]}–${split - 1}` : null],
-    ["Z4", a.min_vigorous != null && lowVig != null ? a.min_vigorous * (1 - lowVig) : null, split ? `${split}–${gz.PEAK[0] - 1}` : null],
-    ["Z5", a.min_peak, gz.PEAK ? `${gz.PEAK[0]}+` : null]];
-  if (lowVig == null && a.min_vigorous) zones[2][1] = a.min_vigorous;   // no HR samples: all vigorous time shows as Z3
-  const ztot = zones.reduce((t, [, v]) => t + (v || 0), 0);
-  const pace = a.km && PACED.has(a.type) ? a.minutes * 60 / a.km : null;
+  // Z1, Z2 and Z5 are Google's light, moderate and peak zones; Z3 and Z4 split
+  // its vigorous zone at the middle (the server does the sums). to_bpm is the
+  // first bpm above a zone.
+  const zoneBpm = (z: RunDetail["hr_zones"]["zones"][number]) => z.from_bpm == null ? (z.to_bpm != null ? `< ${z.to_bpm}` : null)
+    : z.to_bpm == null ? `${z.from_bpm}+` : `${z.from_bpm}–${z.to_bpm - 1}`;
+  const pace = a.km && a.minutes != null && PACED.has(a.type) ? a.minutes * 60 / a.km : null;
   const splits = g?.km_splits || [];
   const splitHr = splits.some(k => k.avg_hr != null);
   // pace, heart rate and cadence share one time axis; walking breaks (cadence
@@ -185,7 +180,7 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
       <div className="head"><h1>{a.name}</h1><span className="sub">{typeName(a.type)} · {fDay(a.date)}{g?.start_time ? " · " + fClock(g.start_time) : ""}</span></div>
       <div className="grid g5">
         <div className="card"><div className="label">Distance</div><div className="big">{a.km ? n2(a.km) : "–"}<small>{a.km ? " km" : ""}</small></div></div>
-        <div className="card"><div className="label">Time</div><div className="big">{fDur(a.minutes * 60)}</div></div>
+        <div className="card"><div className="label">Time</div><div className="big">{fDur(a.minutes != null ? a.minutes * 60 : null)}</div></div>
         <div className="card"><div className="label">Pace</div><div className="big">{fPace(pace)}<small>{pace ? " /km" : ""}</small></div></div>
         <div className="card"><div className="label">Avg HR</div><div className="big">{n0(a.avg_hr)}<small> bpm</small></div><div className="note">max {n0(a.max_hr)}</div></div>
         <div className="card"><div className="label"><Hint k="strain">Strain</Hint></div><div className="big">{n1(w.strain)}</div><div className="note"><Hint k="trimp">TRIMP</Hint> {n0(a.trimp)}</div></div>
@@ -204,7 +199,8 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
       </div></section>
       <section><div className="grid g3">
         <div className="card"><h3><Hint k="zones">Heart rate zones</Hint></h3>
-          {zones.map(([n, v, bpm]) => <Kv key={n} k={<>{n}{bpm ? <> <span className="note">{bpm} bpm</span></> : null}</>}>{v != null ? `${n1(v)} min · ${pct(v / (ztot || 1) * 100)}` : "–"}</Kv>)}</div>
+          {w.hr_zones.zones.map(z => { const bpm = zoneBpm(z);
+            return <Kv key={z.zone} k={<>{z.zone}{bpm ? <> <span className="note">{bpm} bpm</span></> : null}</>}>{z.minutes != null ? `${n1(z.minutes)} min · ${pct(z.pct)}` : "–"}</Kv>; })}</div>
         <div className="card"><h3>Efficiency</h3>
           <Kv k={<Hint k="drift">Aerobic decoupling</Hint>}>{a.decoupling_pct != null ? sgn(a.decoupling_pct, 1) + "%" : "–"}</Kv>
           <Kv k={<Hint k="ef">Efficiency factor</Hint>}>{n2(a.ef)}</Kv>

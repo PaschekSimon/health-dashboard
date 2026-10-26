@@ -59,7 +59,7 @@ function Activity({ fr, to, day, ac, dd }: { fr: string; to: string; day: string
   const dayCharts = useMemo(() => {
     const mins = (t: string) => { const [h, m] = t.slice(11, 16).split(":"); return +h * 60 + +m; };
     const sleepSh: { from: number; to: number; label: string }[] = [];
-    if (dd.sleep) {
+    if (dd.sleep?.start_time && dd.sleep.end_time) {
       const a = new Date(dd.sleep.start_time), b = new Date(dd.sleep.end_time);
       const from = iso(a) < day ? 0 : a.getHours() * 60 + a.getMinutes();
       sleepSh.push({ from, to: b.getHours() * 60 + b.getMinutes(), label: "sleep" });

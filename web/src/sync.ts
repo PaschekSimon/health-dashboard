@@ -8,8 +8,8 @@
 // refreshes the view.
 
 import { useSyncExternalStore } from "react";
-import { fetchJson, send } from "./api/client";
-import type { Status, SyncRun } from "./api/types";
+import { fetchJson, get, send } from "./api/client";
+import type { Meta, Status, SyncRun } from "./api/types";
 import { ago } from "./lib/format";
 
 export interface SyncView { cls: "" | "busy" | "err"; text: string; title: string; disabled: boolean }
@@ -26,8 +26,15 @@ export const setRefresh = (fn: () => void) => { onRefresh = fn; };
 export const refresh = () => onRefresh();
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-const STEP: Record<string, string> = { mcp_cache: "Google daily data", health_sync: "watch samples", daily_check: "daily check",
-  run_report: "run analysis", weekly_summary: "weekly summary", run_scores: "scores" };
+// step labels and how many steps each kind of job runs, from /meta
+let meta: Meta | null = null;
+const stepLabel = (step: string) => {
+  for (const steps of Object.values(meta?.sync.steps || {})) {
+    const s = steps.find(x => x.name === step);
+    if (s) return s.label;
+  }
+  return step;
+};
 let status: Status | null = null, following = false;
 
 function paintIdle() {
@@ -72,16 +79,16 @@ export async function followRun(run: SyncRun): Promise<void> {
   try {
     while (["running", "queued"].includes(run.status)) {
       const steps = run.steps || [], cur = steps.find(s => s.status === "running");
-      const label = run.reason === "recompute" ? "Recomputing scores" : "Syncing";
+      const label = run.reason === "recompute" ? "Recomputing scores" : "Syncing", total = meta?.sync.steps[run.reason]?.length;
       paintBusy(run.status === "queued" ? `${label}: waiting for another sync` :
-        `${label}${cur ? " · " + (STEP[cur.name] || cur.name) : ""} (${steps.filter(s => s.status !== "running").length + 1}/${run.reason === "recompute" ? 4 : 6})`);
+        `${label}${cur ? " · " + stepLabel(cur.name) : ""} (${steps.filter(s => s.status !== "running").length + 1}${total ? "/" + total : ""})`);
       await sleep(2500);
       run = await fetchJson<SyncRun>(`/sync/${run.id}`);
     }
   } finally { following = false; }
   await loadStatus();
   if (run.status !== "ok") {
-    const failed = (run.steps || []).filter(s => s.status === "failed").map(s => STEP[s.name] || s.name);
+    const failed = (run.steps || []).filter(s => s.status === "failed").map(s => stepLabel(s.name));
     paint({ cls: "err", text: `Sync ${run.status}${failed.length ? ": " + failed.join(", ") : ""}`,
       title: `${run.error || ""}\n${(run.steps || []).filter(s => s.output_tail).map(s => s.name + ":\n" + s.output_tail).join("\n")}` });
   }
@@ -98,9 +105,11 @@ async function waitForOther() {
       await sleep(5000);
       const s = await fetchJson<Status>("/status").catch(() => null);
       if (s && !s.sync_running) { status = s; break; }
-      const run = s?.recent_runs?.find(r => r.status === "running");
-      const cur = run?.steps?.find(x => x.status === "running");
-      if (cur) paintBusy(`Syncing · ${STEP[cur.name] || cur.name}`);
+      // recent_runs has no steps, so ask for the running job itself
+      const id = s?.recent_runs?.find(r => r.status === "running")?.id;
+      const run = id != null ? await fetchJson<SyncRun>(`/sync/${id}`).catch(() => null) : null;
+      const cur = run?.steps.find(x => x.status === "running");
+      if (cur) paintBusy(`Syncing · ${stepLabel(cur.name)}`);
     }
   } finally { following = false; }
   paintIdle();
@@ -113,8 +122,9 @@ export function initSync() {
   started = true;
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && status && !following &&
-        (!status.last_successful_sync || Date.now() - new Date(status.last_successful_sync).getTime() > 15 * 60000)) startSync("open");
+        (!status.last_successful_sync || Date.now() - new Date(status.last_successful_sync).getTime() > (meta?.sync.open_min_interval_min ?? 15) * 60000)) startSync("open");
   });
+  get<Meta>("/meta").then(m => { meta = m; }, () => {});
   setInterval(() => { if (!following) loadStatus(); }, 60000);
   loadStatus().then(s => { if (s && !s.sync_running) startSync("open"); });
 }

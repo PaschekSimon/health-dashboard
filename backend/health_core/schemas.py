@@ -385,6 +385,7 @@ class DailyActivity(Model):
     steps: Num | None = None
     distance_km: float | None = None
     active_minutes: Num | None = None
+    floors: Num | None = None
 
 
 class WeekRun(Model):

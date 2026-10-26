@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { get, send } from "../api/client";
-import type { AnnotationResult, Ecg, LongtermResponse } from "../api/types";
+import type { AnnotationResult, Ecg, LongtermResponse, Meta } from "../api/types";
 import { EventNote, Kv, Paged, RangeSeg, Table } from "../components/bits";
 import type { ChartConfig } from "legacy/charts.js";
 import { Chart } from "../components/Chart";
@@ -20,17 +20,17 @@ const MONTHLY: [string, string, (v: number) => string][] = [["recovery", "Recove
   ["vo2max", "VO2 max", n1], ["weight", "Weight kg", n1]];
 const HS_HINT: Record<string, string> = { vo2max: "vo2max", rhr: "rhr", moderate: "active_min", vigorous: "active_min", sri: "sri" };
 const MONTHLY_HINT: Record<string, string> = { recovery: "recovery", hrv_ms: "hrv", rhr: "rhr", sleep_performance: "sleep_perf", strain: "strain", vo2max: "vo2max" };
-const KINDS = ["illness", "alcohol", "injury", "travel", "late_meal", "stress", "run_intent", "post_run_protocol", "bad_sleep_env", "note"];
 const VN: Record<string, string> = { all: "All days", excl_illness: "Without illness", last30: "Last 30 days", last30_excl_illness: "Last 30, without illness" };
 const lower = (s: string | null | undefined) => (s || "").replace(/_/g, " ").toLowerCase();
 
 export async function loadLongterm(args: string[], _q: URLSearchParams, ui: Ui) {
-  const lt = await get<LongtermResponse>("/longterm");
-  if (args[0] === "vo2max") return <Vo2 lt={lt} range={rangeDates(ui)} />;
-  return <Longterm lt={lt} />;
+  if (args[0] === "vo2max") return <Vo2 lt={await get<LongtermResponse>("/longterm")} range={rangeDates(ui)} />;
+  // annotation kinds come from the backend's fixed list
+  const [lt, m] = await Promise.all([get<LongtermResponse>("/longterm"), get<Meta>("/meta").catch(() => null)]);
+  return <Longterm lt={lt} kinds={m?.annotation.kinds || ["note"]} />;
 }
 
-function Longterm({ lt }: { lt: LongtermResponse }) {
+function Longterm({ lt, kinds }: { lt: LongtermResponse; kinds: string[] }) {
   const [ui, setUi] = useUi();
   const [ecg, setEcg] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
@@ -125,7 +125,7 @@ function Longterm({ lt }: { lt: LongtermResponse }) {
                 <button className="btn small" onClick={() => act("delete", a.id)}>Delete</button></td></tr>
           )) : [<tr key="none"><td colSpan={6} className="note">No events.</td></tr>]} />
         <form className="form" id="addev" style={{ marginTop: 12 }} onSubmit={add}>
-          <label>Kind<select name="kind">{KINDS.map(k => <option key={k}>{k}</option>)}</select></label>
+          <label>Kind<select name="kind">{kinds.map(k => <option key={k}>{k}</option>)}</select></label>
           <label>From<input type="date" name="start" required max={today()} /></label>
           <label>To (optional)<input type="date" name="end" /></label>
           <label>Note<input name="note" placeholder="what happened" /></label>
