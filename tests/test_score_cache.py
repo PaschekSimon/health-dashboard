@@ -1,4 +1,4 @@
-"""The raw-data cache (scripts/score_cache.py) must give exactly the scores of a
+"""The raw-data cache (scores/cache.py) must give exactly the scores of a
 full recompute, after any kind of change to the raw data: new days, the
 re-read of the last 48 h with changed values, a deleted gap, an UPDATE,
 moved timestamps, changed steps and a new annotation."""
@@ -10,11 +10,11 @@ import statistics
 from datetime import timedelta
 
 import pytest
-
-import baseline as bl
-import score_cache
-from conftest import run_scores, scoring_env
+from conftest import run_scores
 from fixture_db import make_fixture, midnight
+
+from health_dashboard.analysis import baseline as bl
+from health_dashboard.scores import cache as score_cache
 
 CACHE_TABLES = ("score_cache_meta", "score_dirty_days", "score_minute_hr", "score_hr_day_counts", "score_steps_day")
 
@@ -55,10 +55,8 @@ def test_cache_matches_a_full_scan(tmp_path, full_history):
     """Per-minute HR, sample counts and steps: the same values (and types) as
     the old full scans of hr_samples and steps_minute."""
     fx = copy_fixture(full_history, tmp_path / "fx")
-    with pytest.MonkeyPatch.context() as mp:
-        scoring_env(mp, fx, tmp_path / "cfg.json")
-        h = sqlite3.connect(fx.health_db)
-        assert score_cache.refresh(h)["rebuilt"] == "full"
+    with sqlite3.connect(fx.health_db) as h:
+        assert score_cache.refresh(h, fx.watch)["rebuilt"] == "full"
 
         # the old scores_common.minute_hr
         ref, cur, vals, off = {}, None, [], 0
@@ -86,7 +84,6 @@ def test_cache_matches_a_full_scan(tmp_path, full_history):
             d = bl.local_date(t, o)
             steps[d] = steps.get(d, 0) + n
         assert score_cache.watch_steps_by_day(h) == steps
-        h.close()
 
 
 def mutate(fx, full):
@@ -133,7 +130,8 @@ def test_incremental_equals_full_recompute(tmp_path, full_history):
     conn.commit()
     conn.close()
 
-    cfg = tmp_path / "scores_config.json"
+    cfg = tmp_path / "cfg"                    # scores_config.json goes here
+    cfg.mkdir()
     run_scores(fx, cfg)                       # builds the cache
     assert dirty_days(fx.health_db) == []
 
@@ -149,8 +147,9 @@ def test_incremental_equals_full_recompute(tmp_path, full_history):
     # the same database without any cache, scored from scratch with the same calibration
     ref = copy_fixture(fx, tmp_path / "ref")
     drop_cache(ref.health_db)
-    shutil.copy(cfg, tmp_path / "ref_config.json")
-    recomputed = run_scores(ref, tmp_path / "ref_config.json")
+    (tmp_path / "ref_cfg").mkdir()
+    shutil.copy(cfg / "scores_config.json", tmp_path / "ref_cfg" / "scores_config.json")
+    recomputed = run_scores(ref, tmp_path / "ref_cfg")
 
     for table, rows in recomputed["tables"].items():
         got = incremental["tables"][table]
@@ -162,16 +161,13 @@ def test_incremental_equals_full_recompute(tmp_path, full_history):
 
 def test_rebuilds_when_the_cache_cannot_be_trusted(tmp_path, full_history):
     fx = copy_fixture(full_history, tmp_path / "fx")
-    with pytest.MonkeyPatch.context() as mp:
-        scoring_env(mp, fx, tmp_path / "cfg.json")
-        h = sqlite3.connect(fx.health_db)
-        assert score_cache.refresh(h)["rebuilt"] == "full"
-        assert score_cache.refresh(h) == {"rebuilt": "incremental", "days": {"hr": 0, "steps": 0}}
-        assert score_cache.refresh(h, full=True)["rebuilt"] == "full"
+    w = fx.watch
+    with sqlite3.connect(fx.health_db) as h:
+        assert score_cache.refresh(h, w)["rebuilt"] == "full"
+        assert score_cache.refresh(h, w) == {"rebuilt": "incremental", "days": {"hr": 0, "steps": 0}}
+        assert score_cache.refresh(h, w, full=True)["rebuilt"] == "full"
         h.execute("DROP TRIGGER score_dirty_hr_upd")      # a writer could slip past it
         h.commit()
-        assert score_cache.refresh(h)["rebuilt"] == "full"
-        mp.setattr(bl, "WATCH", "Other Watch")             # settings.json changed watch
-        assert score_cache.refresh(h)["rebuilt"] == "full"
+        assert score_cache.refresh(h, w)["rebuilt"] == "full"
+        assert score_cache.refresh(h, "Other Watch")["rebuilt"] == "full"   # settings.json changed watch
         assert score_cache.minute_hr(h) == {}
-        h.close()

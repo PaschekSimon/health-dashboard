@@ -1,13 +1,9 @@
-"""Zone minutes and easy share (backend/health_core/zones.py): the numbers the
+"""Zone minutes and easy share (src/health_dashboard/core/zones.py): the numbers the
 workout screen, the dashboard and the MCP server show."""
-
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
-from health_core import zones  # noqa: E402
+from health_dashboard.core import zones
 
 GOOGLE = {"LIGHT": [101, 120], "MODERATE": [121, 148], "VIGOROUS": [149, 172], "PEAK": [173, 202]}
 RUN = {"min_light": 1.0, "min_moderate": 20.0, "min_vigorous": 8.0, "min_peak": 1.0}

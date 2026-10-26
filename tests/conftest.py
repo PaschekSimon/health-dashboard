@@ -1,29 +1,23 @@
 """Shared fixtures: the synthetic database (tests/fixture_db.py) and the scores
 computed on it.
 
-The analysis scripts read their settings at import time (data/settings.json,
-the annotations in data/health.db) and write the frozen calibration to
-data/scores_config.json. `scoring_env` points all of that at the fixture
-instead, so the tests never read or write your real data. It is the only
-place that knows about those module globals: when the scripts take their
-settings as arguments, this is the one function to change.
+The score code reads everything through a Context (paths, watch settings,
+exclusions, connections, today). `fixture_context` builds one for the
+fixture, with the calibration file (scores_config.json) in the fixture's
+folder, so the tests never read or write your real data.
 """
 
 import json
 import sqlite3
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from fixture_db import make_fixture  # tests/ is on sys.path (pyproject.toml)
 
-# scripts/ and tests/ are on sys.path (pytest.ini)
-import annotation_effects
-import baseline as bl
-import healthspan
-import recovery
-import scores_common as sc
-import strain
-from fixture_db import make_fixture
+from health_dashboard.analysis.annotation_effects import load_exclusions
+from health_dashboard.config import Paths
+from health_dashboard.context import Context
+from health_dashboard.scores import healthspan, recovery, strain
 
 SCORE_TABLES = {   # table -> ORDER BY
     "score_strain_daily": "date",
@@ -34,39 +28,24 @@ SCORE_TABLES = {   # table -> ORDER BY
 }
 
 
-def scoring_env(mp, fx, config_path):
-    """Patch the scripts' import-time settings to the fixture (mp = a
-    pytest.MonkeyPatch)."""
-    ex = annotation_effects.load_exclusions(fx.health_db)
-    for mod in (bl, sc):
-        mp.setattr(mod, "WATCH", fx.watch)
-    mp.setattr(bl, "WATCH_START", fx.start)
-    mp.setattr(bl, "ANALYSIS_START", fx.start + timedelta(days=6))
-    mp.setattr(bl, "ILLNESS_PERIODS", ex["illness"])
-    mp.setattr(bl, "ALCOHOL_NIGHTS", ex["alcohol"])
-    mp.setattr(sc, "START", fx.start)
-    mp.setattr(sc, "CONFIG", config_path)
-    mp.setattr(sc, "_MINUTE_HR", None)  # per-process cache of per-minute HR
-    mp.setattr(sc, "_CACHE", None)      # raw-data cache refreshed once per process
-    mp.setattr(sc, "today_local", lambda: fx.today)
-    mp.setattr(healthspan, "START", bl.ANALYSIS_START)
+def fixture_context(fx, data_dir=None):
+    """A Context on the fixture's databases, frozen at fx.today. The
+    calibration (scores_config.json) lives in data_dir (default fx.dir)."""
+    paths = Paths(data=Path(data_dir or fx.dir), mcp_db=fx.mcp_db)
+    return Context(paths=paths, watch=fx.watch, watch_start=fx.start,
+                   exclusions=load_exclusions(fx.health_db),
+                   health=sqlite3.connect(fx.health_db), mcp=sqlite3.connect(fx.mcp_db), today=fx.today)
 
 
-def run_scores(fx, config_path=None):
+def run_scores(fx, data_dir=None):
     """Run Strain, Recovery + Sleep and Healthspan on the fixture, like
-    run_scores.py does. Returns {"tables": {table: [row dicts]}, "config": {...}}."""
-    config_path = Path(config_path or fx.dir / "scores_config.json")
-    with pytest.MonkeyPatch.context() as mp:
-        scoring_env(mp, fx, config_path)
-        health, mcp = sqlite3.connect(fx.health_db), sqlite3.connect(fx.mcp_db)
-        try:
-            strain.compute(health, mcp, verbose=False)
-            recovery.compute(health, mcp, verbose=False)
-            healthspan.compute(health, mcp, verbose=False)
-        finally:
-            mcp.close()
-            health.close()
-    return {"tables": read_scores(fx.health_db), "config": json.loads(config_path.read_text(encoding="utf-8"))}
+    `health scores` does. Returns {"tables": {table: [row dicts]}, "config": {...}}."""
+    with fixture_context(fx, data_dir) as ctx:
+        strain.compute(ctx, verbose=False)
+        recovery.compute(ctx, verbose=False)
+        healthspan.compute(ctx, verbose=False)
+        config = json.loads(ctx.paths.scores_config.read_text(encoding="utf-8"))
+    return {"tables": read_scores(fx.health_db), "config": config}
 
 
 def read_scores(db_path):

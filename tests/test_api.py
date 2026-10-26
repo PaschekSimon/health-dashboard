@@ -2,58 +2,41 @@
 TestClient: each answers 200, every key the queries return is listed in its
 response model (so the generated TypeScript types know it), and the response
 carries the query's answer unchanged. The checks are the ones
-backend/tests/check_api_models.py runs on your real data."""
+tests/check_api_models.py runs on your real data."""
 
 import dataclasses
-import os
 import shutil
 import sqlite3
-import sys
-import tempfile
-from pathlib import Path
 
+import check_api_models as cam  # tests/ is on sys.path (pyproject.toml)
 import pytest
+from conftest import fixture_context, run_scores
+from fastapi.testclient import TestClient
 
-pytest.importorskip("fastapi")
-os.environ.setdefault("APPDATA", tempfile.gettempdir())  # backend paths.py reads it at import
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend" / "tests"))
-
-import baseline as bl  # noqa: E402
-import check_api_models as cam  # noqa: E402
-import daily_check  # noqa: E402
-import run_report  # noqa: E402
-import weekly_summary  # noqa: E402
-from conftest import run_scores, scoring_env  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from health_core import explore, paths, queries  # noqa: E402
+from health_dashboard.analysis import daily_check, run_report, weekly_summary
 
 
 @pytest.fixture(scope="module")
 def api_data(fixture_data, tmp_path_factory):
-    """A copy of the fixture with scores and the run/day/week analyses
-    computed, and the backend pointed at it."""
+    """A data folder with a copy of the fixture, scores and the run/day/week
+    analyses computed, and the backend pointed at it (HEALTH_DATA_DIR)."""
     tmp = tmp_path_factory.mktemp("api")
-    for f in (fixture_data.health_db, fixture_data.mcp_db):
-        shutil.copy2(f, tmp / f.name)
-    fx = dataclasses.replace(fixture_data, dir=tmp, health_db=tmp / fixture_data.health_db.name,
-                             mcp_db=tmp / fixture_data.mcp_db.name)
+    fx = dataclasses.replace(fixture_data, dir=tmp, health_db=tmp / "health.db", mcp_db=tmp / "mcp.db")
+    shutil.copy2(fixture_data.health_db, fx.health_db)
+    shutil.copy2(fixture_data.mcp_db, fx.mcp_db)
+    (tmp / "settings.json").write_text(f'{{"watch": "{fx.watch}", "watch_start": "{fx.start}"}}',
+                                       encoding="utf-8")
     with sqlite3.connect(fx.mcp_db) as mcp:  # the MCP cache always has it; run_report reads GPS tracks from it
         mcp.execute("CREATE TABLE IF NOT EXISTS exercise_routes (log_id TEXT PRIMARY KEY, date TEXT NOT NULL, "
                     "tcx TEXT, provider TEXT)")
     run_scores(fx)
+    with fixture_context(fx) as ctx:
+        daily_check.run(ctx)
+        run_report.run(ctx)
+        weekly_summary.run(ctx)
     with pytest.MonkeyPatch.context() as mp:
-        scoring_env(mp, fx, tmp / "scores_config.json")
-        mp.setattr(bl, "HEALTH_DB", fx.health_db)
-        mp.setattr(bl, "MCP_DB", fx.mcp_db)
-        daily_check.run()
-        run_report.run()
-        weekly_summary.run()
-    with pytest.MonkeyPatch.context() as mp:
-        for name, value in (("DATA", tmp), ("HEALTH_DB", fx.health_db), ("MCP_DB", fx.mcp_db),
-                            ("SYNC_LOCK", tmp / ".sync.lock"), ("LAST_SYNC", tmp / ".last_sync")):
-            mp.setattr(paths, name, value)
-        for mod in (queries, explore):
-            mp.setattr(mod, "WATCH", fx.watch)
+        mp.setenv("HEALTH_DATA_DIR", str(tmp))
+        mp.setenv("GOOGLE_HEALTH_MCP_DB_PATH", str(fx.mcp_db))
         yield fx
 
 
