@@ -21,6 +21,7 @@ Writes score_sleep_daily and score_recovery_daily in health.db. Needs
 score_strain_daily (runs strain.py first if it's missing).
 """
 
+import bisect
 import math
 import statistics
 import sys
@@ -82,6 +83,17 @@ def sri(asleep, end_utc, days):
     return 100 * same / ((days - 1) * 1440)
 
 
+def hrv_windows(health):
+    """Watch 5-min RMSSD windows [(t, rmssd_ms)] in time order."""
+    return health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0 ORDER BY t",
+                          (sc.WATCH,)).fetchall()
+
+
+def windows_in(hrv, ts, start, end):
+    """The (t, rmssd) windows with start <= t < end; ts = [t for t, _ in hrv]."""
+    return hrv[bisect.bisect_left(ts, start):bisect.bisect_left(ts, end)]
+
+
 def strain_slope(actual_hist, strain_by_day, night):
     """Extra minutes asleep per Strain point of the previous day, from the 60
     nights before `night` (OLS), clipped to 0..STRAIN_SLOPE_MAX; 0 with too few nights."""
@@ -105,8 +117,8 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
     sessions = bl.sleep_sessions(mcp)
     asleep_all = asleep_set(sessions)
     mhr = sc.minute_hr(health)
-    hrv = health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0",
-                         (sc.WATCH,)).fetchall()
+    hrv = hrv_windows(health)
+    ts = [t for t, _ in hrv]
 
     mains, naps, extra = {}, {}, {}
     for s in sessions:
@@ -127,7 +139,7 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
     for n, s in mains.items():
         nrem = [mhr[m][0] for b, e, t in s["stages"] if t in ("LIGHT", "DEEP")
                 for m in range(b // 60, e // 60) if m in mhr]
-        wins = [r for t, r in hrv if s["start"] <= t < s["end"]]
+        wins = [r for t, r in windows_in(hrv, ts, s["start"], s["end"])]
         night_stats[n] = {"nrem_mean": statistics.mean(nrem) if len(nrem) > 30 else None,
                           "nrem_sd": statistics.stdev(nrem) if len(nrem) > 30 else None,
                           "wins": wins}
@@ -178,8 +190,8 @@ def sleep_scores(health, mcp, strain_by_day, median_strain, rec_hrv):
         thr_hr = statistics.median(means) + 2 * statistics.median(sds)
         p10 = sc.percentile([r for m in prior for r in night_stats[m]["wins"]], 10)
         low_hrv = set()
-        for t, r in hrv:
-            if s["start"] <= t < s["end"] and r < p10:
+        for t, r in windows_in(hrv, ts, s["start"], s["end"]):
+            if r < p10:
                 low_hrv.update(range(t // 60, t // 60 + 5))
         sleep_min = [m for b, e, t in s["stages"] if t != "AWAKE" for m in range(b // 60, e // 60)]
         stress = sum(1 for m in sleep_min if m in low_hrv or (m in mhr and mhr[m][0] > thr_hr))
@@ -223,11 +235,11 @@ def deep_sleep_hrv(health, mcp, mains):
     deep segment of the main sleep; fallback median of deep windows, then of
     all windows in the main sleep. (Used for Recovery until 2026-10-24; kept
     for display as deep_hrv_ms.)"""
-    hrv = health.execute("SELECT t, rmssd_ms FROM hrv_samples WHERE source=? AND rmssd_ms > 0",
-                         (sc.WATCH,)).fetchall()
+    hrv = hrv_windows(health)
+    ts = [t for t, _ in hrv]
     out = {}
     for n, s in mains.items():
-        wins = [(t, r) for t, r in hrv if s["start"] <= t < s["end"]]
+        wins = windows_in(hrv, ts, s["start"], s["end"])
         deep = [(b, e) for b, e, t in s["stages"] if t == "DEEP"]
         ms, src = None, None
         if deep:
@@ -240,7 +252,7 @@ def deep_sleep_hrv(health, mcp, mains):
                 if any_deep:
                     ms, src = statistics.median(any_deep), "deep_median"
         if ms is None and len(wins) >= 6:
-            ms, src = statistics.median(wins), "sleep_median"
+            ms, src = statistics.median(r for t, r in wins), "sleep_median"
         if ms:
             out[n] = (math.log(ms), ms, src)
     return out

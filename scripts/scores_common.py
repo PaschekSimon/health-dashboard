@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import baseline as bl
+import score_cache
 from baseline import WATCH, is_excluded, parse_time  # noqa: F401  (re-exported)
 
 # Frozen calibration (Strain k, Recovery weights), fitted on your own history
@@ -72,26 +73,25 @@ def age_years(mcp):
 # ----------------------------------------------------- per-minute HR -----
 
 _MINUTE_HR = None
+_CACHE = None   # score_cache.refresh() result, once per process
+FULL = False    # run_scores.py --full: rebuild the cache from scratch
+
+
+def cache(health):
+    """Bring the raw-data cache (score_cache.py) up to date, once per process."""
+    global _CACHE
+    if _CACHE is None:
+        _CACHE = score_cache.refresh(health, full=FULL)
+    return _CACHE
 
 
 def minute_hr(health):
     """{utc_minute: (median_bpm, utc_offset)} for minutes with >= 10 samples."""
     global _MINUTE_HR
-    if _MINUTE_HR is not None:
-        return _MINUTE_HR
-    out, cur, vals, off = {}, None, [], 0
-    for t, o, bpm in health.execute(
-            "SELECT t, utc_offset, bpm FROM hr_samples WHERE source=? ORDER BY t", (WATCH,)):
-        m = t // 60
-        if m != cur:
-            if cur is not None and len(vals) >= 10:
-                out[cur] = (statistics.median(vals), off)
-            cur, vals, off = m, [], o
-        vals.append(bpm)
-    if cur is not None and len(vals) >= 10:
-        out[cur] = (statistics.median(vals), off)
-    _MINUTE_HR = out
-    return out
+    if _MINUTE_HR is None:
+        cache(health)
+        _MINUTE_HR = score_cache.minute_hr(health)
+    return _MINUTE_HR
 
 
 # ------------------------------------------------------ robust stats -----

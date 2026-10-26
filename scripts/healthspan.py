@@ -96,14 +96,10 @@ def inputs(health, mcp, d0, d1, drop_illness):
            if keep(date.fromisoformat(d))]
     rhr = [v for d, v in mcp.execute("SELECT date, resting_hr FROM heart_rate WHERE resting_hr IS NOT NULL")
            if keep(date.fromisoformat(d))]
-    worn = {date.fromisoformat(d) for d, n in health.execute(
-        "SELECT date(t + utc_offset, 'unixepoch'), count(*) FROM hr_samples WHERE source=? GROUP BY 1",
-        (sc.WATCH,)) if n >= 30000}  # >= ~17 h of HR samples
-    steps = {}
-    for t, off, n in health.execute("SELECT t_start, utc_offset, steps FROM steps_minute WHERE source=?",
-                                    (sc.WATCH,)):
-        d = sc.local_date(t, off)
-        steps[d] = steps.get(d, 0) + n
+    sc.cache(health)
+    worn = {date.fromisoformat(d) for d, n in sc.score_cache.hr_sample_counts(health).items()
+            if n >= 30000}  # >= ~17 h of HR samples
+    steps = sc.score_cache.watch_steps_by_day(health)
     st = [steps.get(d, 0) for d in days if d in worn]
     azm = {date.fromisoformat(d): (f or 0, (c or 0) + (p or 0)) for d, f, c, p in
            mcp.execute("SELECT date, fat_burn_minutes, cardio_minutes, peak_minutes FROM azm")}

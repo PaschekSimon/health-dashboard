@@ -85,6 +85,8 @@ Google Health API ──> google-health-mcp ──> MCP cache (daily values, sle
    The first run fits the Strain scale and the Recovery weights to your own
    history and stores them in `data\scores_config.json`. After that they stay
    frozen so scores don't drift; `--recalibrate` refits the Strain scale.
+   Later runs only re-read the days whose raw data changed (`--full` rebuilds
+   that cache from scratch, see docs/scores.md).
 
 4. **Set up the backend** (from `backend\`):
 

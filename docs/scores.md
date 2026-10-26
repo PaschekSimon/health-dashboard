@@ -106,3 +106,17 @@ The absolute age is only good to within several years.
   - Next-night effects of annotated events.
 
 These are personal trends modelled on published methods, not medical measurements.
+
+## Fast recompute
+
+Reading every raw heart-rate sample (one every 2 to 3 s) was most of
+`run_scores.py`'s time, and it grew with every day of data. So
+`scripts/score_cache.py` keeps the aggregates the scores need in health.db
+(per-minute median HR, HR samples and watch steps per day) and rebuilds only
+the days whose raw rows changed. SQLite triggers on `hr_samples` and
+`steps_minute` mark those days, whichever script writes them. The score math
+itself still runs over the whole history, because a rolling baseline or the
+sleep-debt chain lets one changed day move later days, so the numbers are
+exactly those of a full recompute (`tests/test_score_cache.py` checks this).
+`run_scores.py --full` rebuilds the cache from scratch; it also rebuilds by
+itself when the watch in `settings.json` changes or a trigger is missing.
