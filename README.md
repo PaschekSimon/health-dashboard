@@ -218,6 +218,9 @@ uv run python tests/smoke/test_api.py    # every endpoint
 uv run python tests/smoke/test_mcp.py    # the MCP server over stdio
 ```
 
+`uv run python tests/check_api_models.py` checks every API response model
+against a copy of your real data, without a running server.
+
 ## Limits
 
 - Built for one person with one watch: workouts and samples are filtered to

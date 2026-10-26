@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, time, timedelta
 
 from . import annotations as ann
+from . import zones
 from .queries import _all, _annotations_by_date, _d, _one, _range, _round, short_id
 
 LOCAL_DAY = "date({c} + coalesce(utc_offset, 0), 'unixepoch')"
@@ -261,11 +262,8 @@ def run_series(db, run_id):
                     "OR log_id LIKE ?", (run_id, f"%/{run_id}"))
     if not ex or not ex["start_time"]:
         return None
-    t0 = int(datetime.fromisoformat(ex["start_time"].replace("Z", "+00:00")).timestamp())
-    t1 = int(datetime.fromisoformat(ex["end_time"].replace("Z", "+00:00")).timestamp()) if ex["end_time"]         else t0 + 4 * 3600
-    hr = [{"s": r["b"] * 10 - t0, "bpm": round(r["v"])}
-          for r in _all(db.h, "SELECT t / 10 b, avg(bpm) v FROM hr_samples WHERE t BETWEEN ? AND ? GROUP BY b "
-                              "ORDER BY b", (t0, t1))]
+    t0, t1 = zones.workout_window(ex["start_time"], ex["end_time"])
+    hr = zones.hr_10s(db.h, t0, t1)
     dyn = {}
     for r in _all(db.h, "SELECT t, metric, value FROM takeout_run_samples WHERE t BETWEEN ? AND ? "
                         "AND metric IN ('cadence_spm', 'pace_distance_mm', 'stride_cm', 'ground_contact_ms', "
@@ -304,16 +302,13 @@ def run_series(db, run_id):
                                 "v": round(r["steps"] * 60 / (r["t_end"] - r["t_start"]))})
         cad_src = "steps per minute" if cadence else None
 
-    day = ex["start_time"][:10]
-    zones = {r["zone"]: [r["min_bpm"], r["max_bpm"]] for r in _all(
-        db.h, "SELECT zone, min_bpm, max_bpm FROM daily_hr_zones WHERE date = coalesce("
-              "(SELECT max(date) FROM daily_hr_zones WHERE date <= ?), (SELECT min(date) FROM daily_hr_zones))", (day,))}
+    google_zones = zones.day_zones(db.h, ex["start_time"][:10])
 
     pts = [[round(lat, 6), round(lon, 6)] for _, lat, lon, _ in track if lat is not None]
     return {"id": short_id(ex["log_id"]), "start": ex["start_time"], "duration": t1 - t0, "hr": hr,
             "pace": _pace(dist), "pace_source": pace_src,
             "cadence": cadence, "cadence_source": cad_src, "walks": _walks(cadence, cad_res),
-            "zones": zones, "dynamics": dyn, "route": pts[::max(1, len(pts) // 400)] or None}
+            "zones": google_zones, "dynamics": dyn, "route": pts[::max(1, len(pts) // 400)] or None}
 
 
 # ----------------------------------------------------------- long-term ----

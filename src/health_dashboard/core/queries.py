@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from ..config import get_paths
 from ..settings import load_settings
 from . import annotations as ann
-from . import jobs
+from . import jobs, zones
 
 # Strain target by Recovery band. Direction from HRV-guided training studies
 # (Kiviniemi 2007, Vesterinen 2016, Javaloyes 2019: hard when recovered, low
@@ -76,6 +76,19 @@ def _all(conn, sql, args=()):
 
 def _round(d, nd=2):
     return {k: round(v, nd) if isinstance(v, float) else v for k, v in d.items()} if d else d
+
+
+def _num(v):
+    """A number Google sends as a string ("145") as a number; anything else unchanged."""
+    if isinstance(v, str):
+        try:
+            return int(v)
+        except ValueError:
+            try:
+                return float(v)
+            except ValueError:
+                return v
+    return v
 
 
 def short_id(log_id):
@@ -236,7 +249,8 @@ def runs(db, date_from=None, date_to=None, all_types=False):
         r["strain"] = _strain_of(db, r["log_id"])
         r["annotation_ids"] = sorted(set(by.get(r["date"], [])) | {
             a["id"] for a in anns if a["target"] in (f"workout:{r['id']}", f"workout:{r['log_id']}")})
-    return {"from": fr, "to": to, "runs": [_round(r) for r in rows], "annotations": anns}
+    return {"from": fr, "to": to, "runs": [_round(r) for r in rows],
+            "running": zones.running_summary([r for r in rows if r["type"] == "RUNNING"]), "annotations": anns}
 
 
 def run_detail(db, run_id):
@@ -251,9 +265,13 @@ def run_detail(db, run_id):
         ex["km_splits"] = [{"km": i + 1,
                             "pace_s_per_km": round(s["metricsSummary"]["averagePaceSecondsPerMeter"] * 1000)
                             if s.get("metricsSummary", {}).get("averagePaceSecondsPerMeter") else None,
-                            "avg_hr": s.get("metricsSummary", {}).get("averageHeartRateBeatsPerMinute")}
+                            "avg_hr": _num(s.get("metricsSummary", {}).get("averageHeartRateBeatsPerMinute"))}
                            for i, s in enumerate(splits)]
     sid = short_id(w["log_id"])
+    hr, day = [], w["date"]
+    if ex and ex["start_time"]:
+        hr = zones.hr_10s(db.h, *zones.workout_window(ex["start_time"], ex["end_time"]))
+        day = ex["start_time"][:10]  # as the workout series does
     anns = [a for a in ann.list_(db.a, w["date"], w["date"])] + \
         ann.for_target(db.a, f"workout:{sid}") + ann.for_target(db.a, f"workout:{w['log_id']}")
     seen, uniq = set(), []
@@ -262,7 +280,7 @@ def run_detail(db, run_id):
             seen.add(a["id"])
             uniq.append(a)
     return {"id": sid, "analysis": _round(w), "strain": _strain_of(db, w["log_id"]), "google": ex,
-            "annotations": uniq}
+            "hr_zones": zones.zone_minutes(w, hr, zones.day_zones(db.h, day)), "annotations": uniq}
 
 
 # ----------------------------------------------------------- dashboard ----
@@ -287,7 +305,7 @@ def dashboard(db, day=None):
     watch_steps = _one(db.h, "SELECT sum(steps) n FROM steps_minute WHERE source = ? AND "
                              "date(t_start + coalesce(utc_offset, 0), 'unixepoch') = ?", (db.watch, ds))
     monday = d - timedelta(days=d.weekday())
-    week_runs = _all(db.h, "SELECT log_id, date, km, minutes, trimp, avg_hr FROM analysis_workouts "
+    week_runs = _all(db.h, "SELECT log_id, date, km, minutes, trimp, avg_hr, pct_below_vigorous FROM analysis_workouts "
                            "WHERE type='RUNNING' AND date BETWEEN ? AND ? ORDER BY date",
                      (monday.isoformat(), (monday + timedelta(days=6)).isoformat()))
     check = _one(db.h, "SELECT * FROM analysis_daily WHERE night = ?", (ds,))
@@ -304,10 +322,7 @@ def dashboard(db, day=None):
         "steps": watch_steps["n"] if watch_steps and watch_steps["n"] is not None else (act or {}).get("steps"),
         "google_daily_activity": act,
         "running_week": {
-            "monday": monday.isoformat(), "runs": len(week_runs),
-            "km": round(sum(r["km"] or 0 for r in week_runs), 2),
-            "minutes": round(sum(r["minutes"] or 0 for r in week_runs), 1),
-            "trimp": round(sum(r["trimp"] or 0 for r in week_runs), 1),
+            "monday": monday.isoformat(), **zones.running_summary(week_runs),
             "list": [{**_round(r), "id": short_id(r["log_id"])} for r in week_runs],
         },
         "daily_check": {"flag": check["flag"], "warning": warning, "hrv_status": check["hrv_status"],
