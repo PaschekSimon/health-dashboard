@@ -13,6 +13,7 @@ import statistics
 from datetime import datetime, timezone
 
 from ..analysis.baseline import parse_time  # noqa: F401  (re-exported)
+from . import cache as score_cache
 
 BASE_NIGHTS = 30                 # robust baseline: last 30 eligible nights
 BASE_MIN = 7                     # fewer -> no score
@@ -60,24 +61,21 @@ def age_years(mcp):
 
 # ----------------------------------------------------- per-minute HR -----
 
+def cache(ctx, full=False):
+    """Bring the raw-data cache (scores/cache.py) up to date, once per Context
+    (ctx.cache). full=True (`health scores --full`) rebuilds it from scratch."""
+    if "score_cache" not in ctx.cache:
+        ctx.cache["score_cache"] = score_cache.refresh(ctx.health, ctx.watch, full=full)
+    return ctx.cache["score_cache"]
+
+
 def minute_hr(ctx):
     """{utc_minute: (median_bpm, utc_offset)} for minutes with >= 10 samples.
-    Built once per Context (ctx.cache)."""
-    if "minute_hr" in ctx.cache:
-        return ctx.cache["minute_hr"]
-    out, cur, vals, off = {}, None, [], 0
-    for t, o, bpm in ctx.health.execute(
-            "SELECT t, utc_offset, bpm FROM hr_samples WHERE source=? ORDER BY t", (ctx.watch,)):
-        m = t // 60
-        if m != cur:
-            if cur is not None and len(vals) >= 10:
-                out[cur] = (statistics.median(vals), off)
-            cur, vals, off = m, [], o
-        vals.append(bpm)
-    if cur is not None and len(vals) >= 10:
-        out[cur] = (statistics.median(vals), off)
-    ctx.cache["minute_hr"] = out
-    return out
+    Read from the cache once per Context (ctx.cache)."""
+    if "minute_hr" not in ctx.cache:
+        cache(ctx)
+        ctx.cache["minute_hr"] = score_cache.minute_hr(ctx.health)
+    return ctx.cache["minute_hr"]
 
 
 # ------------------------------------------------------ robust stats -----
