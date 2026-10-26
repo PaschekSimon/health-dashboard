@@ -103,8 +103,8 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
 }
 
 // ----------------------------------------------------------------- night ----
-// Night detail: Sleep Performance and its parts first, then the stages
-// against the 30 nights before, then the hypnogram.
+// Night detail: the hypnogram first, then Sleep Performance and its parts,
+// then the stages against the 30 nights before.
 
 async function loadNight(d: string) {
   const [sl, e] = await Promise.all([get<SleepResponse>(nightPaths(d)[0]),
@@ -147,6 +147,10 @@ function Night({ d, sl, e }: { d: string; sl: SleepResponse; e: Ex }) {
         {stat("Asleep", fHM(asleep), N ? <><Hint k="need">need</Hint> {fHM(N.total_min)}</> : "")}
         {stat("In bed", fHM(inBed || null), g.start_time ? `${fClock(g.start_time)}–${fClock(g.end_time)}` : "")}
       </div>
+      <section><div className="card"><h3>Sleep phases</h3>{hcfg ? (
+        <><div className="note csub">Stages through the night, {fClock(hcfg.start)}–{fClock(hcfg.end)}{hcfg.brief.length ? ` · thin marks: ${hcfg.brief.length} brief wake-ups` : ""}</div>
+          <Hypnogram id="c-hypno" cfg={hcfg} /></>
+      ) : <p className="note">No stage data for this night.</p>}</div></section>
       <section><div className="card"><h3><Hint k="sleep_perf">Sleep Performance</Hint></h3>{!ok ? <p className="note">{e.error}</p> : (
         <div className="cols">
           <div style={{ flex: 1, minWidth: 240 }}><div className="tablewrap"><table><tbody>
@@ -170,10 +174,6 @@ function Night({ d, sl, e }: { d: string; sl: SleepResponse; e: Ex }) {
         ))}
         <tr><td><b>Asleep</b></td><td className="num"><b>{fHM(asleep)}</b></td><td className="num">{inBed && asleep != null ? pct(asleep / inBed * 100) : "–"}</td><td className="num">{fHM(avg("total_minutes"))}</td></tr>
       </tbody></table></div><p className="note">Share of the time in bed. Usual is the average of the {before.length} nights before this one.</p></section>
-      <section><div className="card"><h3>Sleep phases</h3>{hcfg ? (
-        <><div className="note csub">Stages through the night, {fClock(hcfg.start)}–{fClock(hcfg.end)}{hcfg.brief.length ? ` · thin marks: ${hcfg.brief.length} brief wake-ups` : ""}</div>
-          <Hypnogram id="c-hypno" cfg={hcfg} /></>
-      ) : <p className="note">No stage data for this night.</p>}</div></section>
       {anns.length ? <section><h2>Notes</h2>{anns.map(x => <p key={x.id} className="note">{x.kind} ({x.status}): {x.note || ""}</p>)}</section> : null}
     </>
   );
