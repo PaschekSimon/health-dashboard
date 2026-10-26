@@ -15,7 +15,9 @@ package is a dependency of this one, and its login lives in
     ... sync --types heart-rate     # only some types
 
 Each run resumes from the last synced day per type, re-reading the last two
-days because the watch uploads late. Rows are keyed by time and source, so
+days because the watch uploads late. Nothing before the first watch day is
+read, and each run deletes the phone's step days before it from the MCP's
+cache (`google-health-mcp sync --since` would bring them back). Rows are keyed by time and source, so
 re-reading never duplicates. Times are stored as UTC epoch seconds, with the
 local UTC offset in seconds beside them for grouping by local day.
 """
@@ -33,6 +35,8 @@ from ..config import get_paths
 from ..settings import load_settings
 
 OVERLAP_DAYS = 2
+# MCP cache tables the phone fills on its own (steps, distance, calories)
+PHONE_TABLES = ("activity",)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS hr_samples (
@@ -293,6 +297,7 @@ def sync_type(conn, data_type: str, since: date | None, today: date, first_day: 
             "SELECT synced_through FROM sync_state WHERE data_type = ?", (data_type,)
         ).fetchone()
         since = (date.fromisoformat(row[0]) - timedelta(days=OVERLAP_DAYS)) if row else first_day
+    since = max(since, first_day)
     sql = f"INSERT OR REPLACE INTO {table} VALUES ({', '.join('?' * ncols)})"
     total = 0
     day = since
@@ -310,6 +315,24 @@ def sync_type(conn, data_type: str, since: date | None, today: date, first_day: 
         total += len(points)
         day = last + timedelta(days=1)
     return total
+
+
+def prune_before_watch(mcp_db, first_day: date) -> int:
+    """Delete the phone-only days before `first_day` from the MCP's cache."""
+    if not mcp_db.exists():
+        return 0
+    conn = sqlite3.connect(mcp_db, timeout=30)
+    try:
+        n = 0
+        for table in PHONE_TABLES:
+            try:
+                n += conn.execute(f"DELETE FROM {table} WHERE date < ?", (first_day.isoformat(),)).rowcount
+            except sqlite3.OperationalError:  # table not built yet
+                pass
+        conn.commit()
+        return n
+    finally:
+        conn.close()
 
 
 def main(argv=None) -> int:
@@ -333,6 +356,11 @@ def main(argv=None) -> int:
             failed = True
             print(f"{data_type:24} FAILED: {e}", file=sys.stderr)
     conn.close()
+    try:
+        if n := prune_before_watch(paths.mcp_db, first_day):
+            print(f"pruned {n} phone-only days before {first_day} from the MCP cache")
+    except sqlite3.Error as e:
+        print(f"pruning the MCP cache FAILED: {e}", file=sys.stderr)
     return 1 if failed else 0
 
 

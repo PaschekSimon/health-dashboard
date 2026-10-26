@@ -35,11 +35,14 @@ def _ro(path):
 class Db:
     """Read-only connections to both databases, plus a writable one for
     annotations (which uses its own), and the settings queries need (paths,
-    watch name). Paths default to the environment (config.get_paths)."""
+    watch name, first watch day). Paths default to the environment
+    (config.get_paths)."""
 
     def __init__(self, paths=None):
         self.paths = paths or get_paths()
-        self.watch = load_settings(self.paths).watch
+        settings = load_settings(self.paths)
+        self.watch = settings.watch
+        self.watch_start = settings.watch_start.isoformat()
         self.h = _ro(self.paths.health_db)
         self.m = _ro(self.paths.mcp_db)
         self.a = ann.connect(self.paths.health_db)
@@ -101,6 +104,12 @@ def _range(date_from, date_to, default_days=30):
     if fr > to:
         raise ValueError("from is after to")
     return fr.isoformat(), to.isoformat()
+
+
+def _from_watch(db, fr):
+    """`fr`, moved up to the first watch day: the phone's step days before the
+    watch are left out of every range."""
+    return max(fr, db.watch_start)
 
 
 def _annotations_by_date(db, fr, to):
@@ -376,6 +385,7 @@ def trend(db, metric, date_from=None, date_to=None):
         raise ValueError(f"metric must be one of {', '.join(METRICS)}")
     src, table, dcol, vcol = METRICS[metric]
     fr, to = _range(date_from, date_to)
+    fr = _from_watch(db, fr)
     pts = [{"date": r["d"], "value": round(r["v"], 3) if isinstance(r["v"], float) else r["v"]}
            for r in _all(getattr(db, src), f"SELECT {dcol} d, {vcol} v FROM {table} WHERE {dcol} BETWEEN ? AND ? "
                                            f"AND {vcol} IS NOT NULL ORDER BY {dcol}", (fr, to))]
