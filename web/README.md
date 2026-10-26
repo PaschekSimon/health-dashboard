@@ -20,8 +20,9 @@ npm run build
 ```
 
 The build lands in `web/dist/` (not committed). The backend picks it up on
-its next start and serves it at `/next/`; restart it with `run_backend.ps1`
-(or log out and in) after the first build. Later builds show up on a reload.
+its next start and serves it at `/next/`; restart it once after the first
+build (stop the running `health serve`, or log out and in if it starts with
+Windows, then `uv run health open`). Later builds show up on a reload.
 
 ## Work on it
 
@@ -53,7 +54,7 @@ alias in `vite.config.ts`), so a style fix shows in both apps.
 `src/api/schema.d.ts` is generated from the backend's response models
 (`/openapi.json`) with openapi-typescript; `src/api/types.ts` gives its
 shapes short names. After changing a response model in
-`backend/health_core/schemas.py`, regenerate it with the backend running and
+`src/health_dashboard/core/schemas.py`, regenerate it with the backend running and
 commit the result:
 
 ```

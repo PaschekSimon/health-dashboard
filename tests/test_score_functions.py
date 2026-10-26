@@ -6,18 +6,23 @@ from datetime import date, timedelta
 
 import pytest
 
-import annotation_effects as ae
-import baseline as bl
-import healthspan
-import recovery
-import scores_common as sc
-import strain
+from health_dashboard.analysis import annotation_effects as ae
+from health_dashboard.analysis import baseline as bl
+from health_dashboard.context import ANALYSIS_DELAY, Context
+from health_dashboard.scores import common as sc
+from health_dashboard.scores import healthspan, recovery, strain
 
 D = date(2026, 3, 1)
 
 
 def series(values, start=D):
     return {start + timedelta(days=i): v for i, v in enumerate(values)}
+
+
+def ctx_with(illness=(), alcohol=(), analysis_start=D):
+    """A Context with only exclusions and dates set (no databases)."""
+    return Context(paths=None, watch="Pixel Watch 3", watch_start=analysis_start - ANALYSIS_DELAY,
+                   exclusions=ae.Exclusions(list(illness), set(alcohol)), health=None, mcp=None)
 
 
 # ---------------------------------------------------------- statistics ---
@@ -43,33 +48,30 @@ def test_correlations():
     assert (rho, n) == (pytest.approx(1.0), 4)
 
 
-def test_prior_eligible_skips_excluded_and_missing(monkeypatch):
-    monkeypatch.setattr(bl, "ILLNESS_PERIODS", [(D + timedelta(2), D + timedelta(3))])
-    monkeypatch.setattr(bl, "ALCOHOL_NIGHTS", {D + timedelta(5)})
+def test_prior_eligible_skips_excluded_and_missing():
+    ctx = ctx_with(illness=[(D + timedelta(2), D + timedelta(3))], alcohol={D + timedelta(5)})
     s = series([10, 11, 12, 13, None, 15, 16, 17])
-    assert sc.prior_eligible(s, D + timedelta(7)) == [16, 11, 10]
-    assert sc.prior_eligible(s, D + timedelta(7), n=2) == [16, 11]
+    assert sc.prior_eligible(ctx, s, D + timedelta(7)) == [16, 11, 10]
+    assert sc.prior_eligible(ctx, s, D + timedelta(7), n=2) == [16, 11]
 
 
-def test_the_two_robust_z_sign_conventions(monkeypatch):
-    """scores_common.robust_z: positive = better when `sign` says so (Recovery).
+def test_the_two_robust_z_sign_conventions():
+    """scores.common.robust_z: positive = better when `sign` says so (Recovery).
     baseline.robust_z: positive = worse (the analyses). Same data, opposite signs."""
-    monkeypatch.setattr(bl, "ILLNESS_PERIODS", [])
-    monkeypatch.setattr(bl, "ALCOHOL_NIGHTS", set())
-    monkeypatch.setattr(bl, "ANALYSIS_START", D)
+    ctx = ctx_with()
     vals = [60, 62, 58, 61, 59, 60, 63, 57, 60, 61, 59, 62, 58, 60, 61, 59]
     last = D + timedelta(len(vals))
     rhr = series(vals + [66])          # a high resting HR on the last night
-    z_rec, n = sc.robust_z(rhr, last, -1, floor=2.0)
+    z_rec, n = sc.robust_z(ctx, rhr, last, -1, floor=2.0)
     assert n == len(vals) and z_rec < 0                      # Recovery: worse
     nights = {d: {"rhr": v} for d, v in rhr.items()}
-    z_bl, _, _ = bl.robust_z(nights, last, "rhr")
+    z_bl, _, _ = bl.robust_z(ctx, nights, last, "rhr")
     assert z_bl > 0                                          # analyses: worse is positive
     # floor: a flat RHR baseline still gives a finite z
     flat = series([60] * 10 + [62])
-    z, _ = sc.robust_z(flat, D + timedelta(10), -1, floor=2.0)
+    z, _ = sc.robust_z(ctx, flat, D + timedelta(10), -1, floor=2.0)
     assert z == pytest.approx(-1.0)
-    assert sc.robust_z(series([60] * 5 + [62]), D + timedelta(5)) == (None, 5)   # < 7 nights
+    assert sc.robust_z(ctx, series([60] * 5 + [62]), D + timedelta(5)) == (None, 5)   # < 7 nights
 
 
 # ---------------------------------------------------------- HR and load ---
@@ -156,5 +158,6 @@ def test_nights_of(kind, start, end, target, nights):
 
 def test_load_exclusions_from_the_fixture(fixture_data, tmp_path):
     ex = ae.load_exclusions(fixture_data.health_db)
-    assert ex == {"illness": [fixture_data.illness], "alcohol": {fixture_data.alcohol_night}}
-    assert ae.load_exclusions(tmp_path / "missing.db") is None
+    assert ex == ae.Exclusions([fixture_data.illness], {fixture_data.alcohol_night})
+    assert ex.is_ill(fixture_data.illness[0]) and ex.is_excluded(fixture_data.alcohol_night)
+    assert ae.load_exclusions(tmp_path / "missing.db") == ae.Exclusions()   # nothing excluded

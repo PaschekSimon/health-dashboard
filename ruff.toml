@@ -1,5 +1,5 @@
 # Lint with: ruff check .   (also runs as a pre-commit hook, see .pre-commit-config.yaml)
-target-version = "py312"
+target-version = "py313"
 line-length = 130
 
 [lint]

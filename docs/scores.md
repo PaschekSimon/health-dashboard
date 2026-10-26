@@ -3,12 +3,12 @@
 The dashboard's four scores follow what WHOOP has published about its own
 (Strain, Recovery, Sleep Performance, Healthspan age), rebuilt from Google
 Health data with published research where WHOOP gives no formula. They are
-computed by `scripts/run_scores.py` and stored in the `score_*` tables of
+computed by `health scores` (`src/health_dashboard/scores/`) and stored in the `score_*` tables of
 `data/health.db`. A night is always keyed by the date you wake up on.
 
 All baselines are personal and robust: median and MAD over earlier nights,
 skipping the last two nights and every night excluded by an annotation
-(illness, alcohol; see `scripts/annotation_effects.py`). Fewer than 7 baseline
+(illness, alcohol; see `analysis/annotation_effects.py`). Fewer than 7 baseline
 nights means no score; fewer than 14 marks it provisional.
 
 ## Strain (0 to 21)
@@ -47,7 +47,7 @@ that positive means better. They are combined as
 `Recovery = 1 + 98 × Φ(C / s)`, where s is the spread of C over the baseline,
 so a normal night sits near 50 %.
 
-The **early warning** (`scripts/daily_check.py`) is separate. It flags AMBER
+The **early warning** (`health daily-check`) is separate. It flags AMBER
 when one physiological signal is more than 2 robust z away from your baseline,
 or two signals are more than 1.5 away, and RED when AMBER holds two nights running.
 
@@ -80,7 +80,7 @@ Correlated pairs (VO2 max + resting HR, steps + moderate minutes) are weighted
 0.7 so they don't count twice. Age comes from your Google profile.
 
 The VO2 max referent (48, capped at 60) is the FRIEND norm for men aged
-20-29 (`REF` and `VO2_CAP` in `scripts/healthspan.py`). For other ages or for
+20-29 (`REF` and `VO2_CAP` in `scores/healthspan.py`). For other ages or for
 women, change those two values or the Healthspan age will be off.
 
 - **Healthspan age** uses all available data (WHOOP uses 6 months).
@@ -106,3 +106,17 @@ The absolute age is only good to within several years.
   - Next-night effects of annotated events.
 
 These are personal trends modelled on published methods, not medical measurements.
+
+## Fast recompute
+
+Reading every raw heart-rate sample (one every 2 to 3 s) was most of
+`health scores`' time, and it grew with every day of data. So
+`scores/cache.py` keeps the aggregates the scores need in health.db
+(per-minute median HR, HR samples and watch steps per day) and rebuilds only
+the days whose raw rows changed. SQLite triggers on `hr_samples` and
+`steps_minute` mark those days, whichever script writes them. The score math
+itself still runs over the whole history, because a rolling baseline or the
+sleep-debt chain lets one changed day move later days, so the numbers are
+exactly those of a full recompute (`tests/test_score_cache.py` checks this).
+`health scores --full` rebuilds the cache from scratch; it also rebuilds by
+itself when the watch in `settings.json` changes or a trigger is missing.

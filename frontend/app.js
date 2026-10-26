@@ -1,6 +1,6 @@
 // Health web app: six tabs (Dashboard, Recovery, Sleep, Activity, Training,
 // Long-term) plus a raw Data browser, all on the local API served by the same
-// FastAPI process (backend/app.py). Plain ES modules, no build step.
+// FastAPI process (src/health_dashboard/app.py). Plain ES modules, no build step.
 
 import { chart, hypnogram, legend, route as drawRoute } from "./charts.js";
 
@@ -836,7 +836,7 @@ async function workoutView(id) {
   const a = w.analysis, g = w.google || {}, ms = g.metrics_summary || {}, mob = ms.mobilityMetrics || {};
   // the API also sends day/night annotations (alcohol, illness); only notes on the run itself belong here
   const runAnns = w.annotations.filter(x => (x.target || "").startsWith("workout:"));
-  // minutes per zone come from the backend (health_core/zones.py): Z3 and Z4
+  // minutes per zone come from the backend (core/zones.py): Z3 and Z4
   // split Google's vigorous zone in the middle; to_bpm is exclusive
   const zoneBpm = z => z.from_bpm == null && z.to_bpm == null ? "" : z.from_bpm == null ? `< ${z.to_bpm}`
     : z.to_bpm == null ? `${z.from_bpm}+` : `${z.from_bpm}–${z.to_bpm - 1}`;
