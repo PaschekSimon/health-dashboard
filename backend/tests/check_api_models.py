@@ -11,6 +11,8 @@ For each route it reports the status code and two problems a 200 can hide:
 - values that differ between the query's answer and the response.
 --data is for running it from another checkout (e.g. a git worktree of a
 branch) against the data folder of your main one.
+
+tests/test_api.py runs the same checks on the synthetic test data.
 """
 
 import argparse
@@ -27,32 +29,11 @@ from pathlib import Path
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--data", type=Path, help="data folder to read (default: this checkout's data/)")
-ap.add_argument("--days", type=int, default=60, help="how far back the range routes look (default 60)")
-args = ap.parse_args()
-
-from health_core import paths  # noqa: E402
-
-data = args.data or paths.DATA
-tmp = Path(tempfile.mkdtemp(prefix="health-check-"))
-src = sqlite3.connect((data / "health.db").resolve().as_uri() + "?mode=ro", uri=True)
-dst = sqlite3.connect(tmp / "health.db")
-src.backup(dst)
-src.close()
-dst.close()
-paths.DATA, paths.HEALTH_DB = tmp, tmp / "health.db"
-paths.SYNC_LOCK, paths.LAST_SYNC = tmp / ".sync.lock", tmp / ".last_sync"
-if (data / ".last_sync").exists():
-    shutil.copy2(data / ".last_sync", paths.LAST_SYNC)
-if (data / "scores_config.json").exists():
-    shutil.copy2(data / "scores_config.json", tmp / "scores_config.json")
-
 from fastapi.testclient import TestClient  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import app as appmod  # noqa: E402
-from health_core import explore, meta, queries  # noqa: E402
+from health_core import explore, meta, paths, queries  # noqa: E402
 from health_core import schemas as S  # noqa: E402
 
 
@@ -95,62 +76,93 @@ def differs(raw, got, path="$"):
     return [] if raw == got else [f"{path}: {raw!r} became {got!r}"]
 
 
-today = date.today()
-fr, to = (today - timedelta(days=args.days)).isoformat(), today.isoformat()
-with queries.Db() as db:
-    runs = queries.runs(db, fr, to, all_types=True)["runs"]
-    ecgs = explore.longterm(db)["ecg"]
-    tables = explore.catalog(db)["tables"]
-days = [(today - timedelta(days=n)).isoformat() for n in (0, 1, 7, 30)]
+def use_data(data, tmp):
+    """Point the backend at a copy of data/health.db in tmp (read-only on the original)."""
+    src = sqlite3.connect((Path(data) / "health.db").resolve().as_uri() + "?mode=ro", uri=True)
+    dst = sqlite3.connect(tmp / "health.db")
+    src.backup(dst)
+    src.close()
+    dst.close()
+    paths.DATA, paths.HEALTH_DB = tmp, tmp / "health.db"
+    paths.SYNC_LOCK, paths.LAST_SYNC = tmp / ".sync.lock", tmp / ".last_sync"
+    for name in (".last_sync", "scores_config.json"):
+        if (Path(data) / name).exists():
+            shutil.copy2(Path(data) / name, tmp / name)
 
-routes = [("/meta", S.Meta, lambda db: meta.meta()), ("/status", S.Status, queries.status),
-          ("/longterm", S.LongTerm, explore.longterm), ("/data", S.Catalog, explore.catalog),
-          (f"/recovery?from={fr}&to={to}", S.RecoveryRange, lambda db: queries.recovery(db, fr, to)),
-          (f"/sleep?from={fr}&to={to}", S.SleepRange, lambda db: queries.sleep(db, fr, to)),
-          (f"/runs?from={fr}&to={to}&all_types=true", S.RunList, lambda db: queries.runs(db, fr, to, True)),
-          (f"/activity?from={fr}&to={to}", S.ActivityRange, lambda db: explore.activity(db, fr, to)),
-          (f"/training?from={fr}&to={to}", S.Training, lambda db: explore.training(db, fr, to)),
-          (f"/annotations?from={fr}&to={to}", list[S.Annotation], lambda db: queries.ann.list_(db.a, fr, to))]
-for d in days:
-    routes += [(f"/dashboard?date={d}", S.Dashboard, lambda db, d=d: queries.dashboard(db, d)),
-               (f"/day/{d}", S.DayDetail, lambda db, d=d: explore.day_detail(db, d))]
-    routes += [(f"/explain/{s}?date={d}", S.Explanation, lambda db, d=d, s=s: queries.explain_score(db, d, s))
-               for s in ("recovery", "sleep", "strain")]
-for m in queries.METRICS:
-    routes.append((f"/trend/{m}?from={fr}&to={to}", S.Trend, lambda db, m=m: queries.trend(db, m, fr, to)))
-for r in runs:
-    routes += [(f"/runs/{r['id']}", S.RunDetail, lambda db, i=r["id"]: queries.run_detail(db, i)),
-               (f"/workout-series/{r['id']}", S.WorkoutSeries, lambda db, i=r["id"]: explore.run_series(db, i))]
-for e in ecgs[:3]:
-    rid = e["reading_id"].rsplit("/", 1)[-1]
-    routes.append((f"/ecg/{rid}", S.Ecg, lambda db, i=rid: explore.ecg_waveform(db, i)))
-for t in tables:
-    routes.append((f"/data/{t['source']}/{t['table']}?limit=20", S.TableRows,
-                   lambda db, t=t: explore.browse(db, t["source"], t["table"], limit=20)))
 
-failed = 0
-try:
-    with TestClient(appmod.app) as client:
-        for url, model, fn in routes:
-            try:
-                r = client.get(url)
-            except Exception as e:  # a response that fails its model raises here, with the details
-                failed += 1
-                print(f"FAIL 500 {url}\n      {type(e).__name__}: {str(e)[:1500]}")
-                continue
-            problems = []
-            if r.status_code == 200:
-                with queries.Db() as db:
-                    raw = json.loads(json.dumps(fn(db)))
-                if raw is not None:
-                    problems = [f"not in the model: {k}" for k in undeclared(model, raw)] + differs(raw, r.json())
-            elif not (r.status_code == 404 and url.startswith("/workout-series/")):  # workouts without a Google row
-                problems = [r.text[:1500]]
-            failed += bool(problems)
-            print(f"{'ok  ' if not problems else 'FAIL'} {r.status_code} {url}")
-            for p in problems[:10]:
-                print("     ", p)
-finally:
-    shutil.rmtree(tmp, ignore_errors=True)
-print(f"\n{len(routes) - failed}/{len(routes)} routes ok")
-sys.exit(1 if failed else 0)
+def routes(today, days):
+    """[(url, response model, function giving the raw answer from a queries.Db)] for every GET route."""
+    fr, to = (today - timedelta(days=days)).isoformat(), today.isoformat()
+    with queries.Db() as db:
+        runs = queries.runs(db, fr, to, all_types=True)["runs"]
+        ecgs = explore.longterm(db)["ecg"]
+        tables = explore.catalog(db)["tables"]
+    out = [("/meta", S.Meta, lambda db: meta.meta()), ("/status", S.Status, queries.status),
+           ("/longterm", S.LongTerm, explore.longterm), ("/data", S.Catalog, explore.catalog),
+           (f"/recovery?from={fr}&to={to}", S.RecoveryRange, lambda db: queries.recovery(db, fr, to)),
+           (f"/sleep?from={fr}&to={to}", S.SleepRange, lambda db: queries.sleep(db, fr, to)),
+           (f"/runs?from={fr}&to={to}&all_types=true", S.RunList, lambda db: queries.runs(db, fr, to, True)),
+           (f"/activity?from={fr}&to={to}", S.ActivityRange, lambda db: explore.activity(db, fr, to)),
+           (f"/training?from={fr}&to={to}", S.Training, lambda db: explore.training(db, fr, to)),
+           (f"/annotations?from={fr}&to={to}", list[S.Annotation], lambda db: queries.ann.list_(db.a, fr, to))]
+    for d in [(today - timedelta(days=n)).isoformat() for n in (0, 1, 7, 30)]:
+        out += [(f"/dashboard?date={d}", S.Dashboard, lambda db, d=d: queries.dashboard(db, d)),
+                (f"/day/{d}", S.DayDetail, lambda db, d=d: explore.day_detail(db, d))]
+        out += [(f"/explain/{s}?date={d}", S.Explanation, lambda db, d=d, s=s: queries.explain_score(db, d, s))
+                for s in ("recovery", "sleep", "strain")]
+    for m in queries.METRICS:
+        out.append((f"/trend/{m}?from={fr}&to={to}", S.Trend, lambda db, m=m: queries.trend(db, m, fr, to)))
+    for r in runs:
+        out += [(f"/runs/{r['id']}", S.RunDetail, lambda db, i=r["id"]: queries.run_detail(db, i)),
+                (f"/workout-series/{r['id']}", S.WorkoutSeries, lambda db, i=r["id"]: explore.run_series(db, i))]
+    for e in ecgs[:3]:
+        rid = e["reading_id"].rsplit("/", 1)[-1]
+        out.append((f"/ecg/{rid}", S.Ecg, lambda db, i=rid: explore.ecg_waveform(db, i)))
+    for t in tables:
+        out.append((f"/data/{t['source']}/{t['table']}?limit=20", S.TableRows,
+                    lambda db, t=t: explore.browse(db, t["source"], t["table"], limit=20)))
+    return out
+
+
+def check(client, url, model, fn):
+    """(status code, [problems]) for one route."""
+    try:
+        r = client.get(url)
+    except Exception as e:  # a response that fails its model raises here, with the details
+        return 500, [f"{type(e).__name__}: {str(e)[:1500]}"]
+    if r.status_code != 200:
+        # a workout without Google's record has no series
+        ok = r.status_code == 404 and url.startswith("/workout-series/")
+        return r.status_code, [] if ok else [r.text[:1500]]
+    with queries.Db() as db:
+        raw = json.loads(json.dumps(fn(db)))
+    if raw is None:
+        return 200, []
+    return 200, [f"not in the model: {k}" for k in undeclared(model, raw)] + differs(raw, r.json())
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data", type=Path, help="data folder to read (default: this checkout's data/)")
+    ap.add_argument("--days", type=int, default=60, help="how far back the range routes look (default 60)")
+    args = ap.parse_args()
+    tmp = Path(tempfile.mkdtemp(prefix="health-check-"))
+    failed, todo = 0, []
+    try:
+        use_data(args.data or paths.DATA, tmp)
+        todo = routes(date.today(), args.days)
+        with TestClient(appmod.app) as client:
+            for url, model, fn in todo:
+                status, problems = check(client, url, model, fn)
+                failed += bool(problems)
+                print(f"{'ok  ' if not problems else 'FAIL'} {status} {url}")
+                for p in problems[:10]:
+                    print("     ", p)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(f"\n{len(todo) - failed}/{len(todo)} routes ok")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
