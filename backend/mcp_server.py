@@ -36,7 +36,8 @@ def _recompute_if(changed):
 def get_day(date: str) -> dict:
     """Everything for one day (YYYY-MM-DD): Recovery % with its z-scores, last
     night's sleep (night keyed by wake date) with Sleep Performance, Strain and
-    a strain target, steps, this week's running, the daily-check warning
+    a strain target, steps, this week's running (km, minutes, TRIMP and
+    easy_pct: share of run time at or below the top of Z2), the daily-check warning
     (AMBER/RED) and the annotations (illness, alcohol, ...) touching that day."""
     with queries.Db() as db:
         return queries.dashboard(db, date)
@@ -57,8 +58,9 @@ def get_trend(metric: str, date_from: str, date_to: str) -> dict:
 def list_runs(date_from: str, date_to: str) -> dict:
     """Watch-recorded runs between two dates (YYYY-MM-DD): km, minutes, avg HR,
     TRIMP, Strain, minutes per HR zone, efficiency factor, decoupling, HR
-    recovery, plus annotations (e.g. run_intent) touching them. Use the `id`
-    with get_run."""
+    recovery, plus annotations (e.g. run_intent) touching them, and a
+    `running` summary (runs, km, minutes, TRIMP, easy_pct). Use the `id` with
+    get_run."""
     with queries.Db() as db:
         return queries.runs(db, date_from, date_to)
 
@@ -66,8 +68,10 @@ def list_runs(date_from: str, date_to: str) -> dict:
 @mcp.tool()
 def get_run(workout_id: str) -> dict:
     """One workout by id (the short numeric id from list_runs, or the full
-    log_id): full analysis row, Google's summary and km splits, Strain, and
-    annotations targeting it or its day."""
+    log_id): full analysis row, Google's summary and km splits, Strain,
+    minutes per HR zone Z1-Z5 as the app shows them (hr_zones; Z3/Z4 split
+    Google's vigorous zone in the middle), and annotations targeting it or its
+    day."""
     with queries.Db() as db:
         r = queries.run_detail(db, workout_id)
     return r or {"error": f"no workout with id {workout_id}"}
