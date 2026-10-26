@@ -20,7 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from health_core import annotations as ann
-from health_core import explore, jobs, queries
+from health_core import explore, jobs, meta, queries
+from health_core import schemas as S
 
 WEB = Path(__file__).resolve().parent.parent / "frontend"
 # the React port (web/), once built with `npm run build`; served at /next/ until it replaces /app/
@@ -43,7 +44,7 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="Health backend", version="1.0", lifespan=lifespan)
+app = FastAPI(title="Health backend", version="1.1", lifespan=lifespan)
 
 
 # ------------------------------------------------------------- guard ----
@@ -103,20 +104,29 @@ def _bad(e):
     raise HTTPException(400, str(e))
 
 
+# ---------------------------------------------------------------- meta ----
+
+@app.get("/meta", response_model=S.Meta)
+def get_meta():
+    """Fixed lists and limits: annotation kinds, sync steps by job reason,
+    Recovery and Strain bands, Strain targets, trend metrics."""
+    return meta.meta()
+
+
 # ---------------------------------------------------------------- sync ----
 
 class SyncRequest(BaseModel):
     reason: Literal["open", "button"] = "button"
 
 
-@app.post("/sync")
+@app.post("/sync", response_model=S.SyncRun)
 def post_sync(req: SyncRequest):
     """Start a sync job (single flight). reason=open skips if the last successful
     sync was < 15 min ago; reason=button always runs."""
     return jobs.start_sync(req.reason, origin="api")
 
 
-@app.get("/sync/{run_id}")
+@app.get("/sync/{run_id}", response_model=S.SyncRun)
 def get_sync(run_id: int):
     conn = jobs.connect()
     try:
@@ -128,7 +138,7 @@ def get_sync(run_id: int):
     return run
 
 
-@app.get("/status")
+@app.get("/status", response_model=S.Status)
 def get_status():
     with _db() as db:
         return queries.status(db)
@@ -136,13 +146,13 @@ def get_status():
 
 # ---------------------------------------------------------------- reads ----
 
-@app.get("/dashboard")
+@app.get("/dashboard", response_model=S.Dashboard)
 def get_dashboard(date: date | None = None):
     with _db() as db:
         return queries.dashboard(db, date)
 
 
-@app.get("/recovery")
+@app.get("/recovery", response_model=S.RecoveryRange)
 def get_recovery(from_: date | None = Query(None, alias="from"), to: date | None = None):
     with _db() as db:
         try:
@@ -151,7 +161,7 @@ def get_recovery(from_: date | None = Query(None, alias="from"), to: date | None
             _bad(e)
 
 
-@app.get("/sleep")
+@app.get("/sleep", response_model=S.SleepRange)
 def get_sleep(from_: date | None = Query(None, alias="from"), to: date | None = None):
     with _db() as db:
         try:
@@ -160,7 +170,7 @@ def get_sleep(from_: date | None = Query(None, alias="from"), to: date | None = 
             _bad(e)
 
 
-@app.get("/runs")
+@app.get("/runs", response_model=S.RunList)
 def get_runs(from_: date | None = Query(None, alias="from"), to: date | None = None, all_types: bool = False):
     with _db() as db:
         try:
@@ -169,7 +179,7 @@ def get_runs(from_: date | None = Query(None, alias="from"), to: date | None = N
             _bad(e)
 
 
-@app.get("/runs/{run_id:path}")
+@app.get("/runs/{run_id:path}", response_model=S.RunDetail)
 def get_run(run_id: str):
     with _db() as db:
         r = queries.run_detail(db, run_id)
@@ -178,7 +188,7 @@ def get_run(run_id: str):
     return r
 
 
-@app.get("/trend/{metric}")
+@app.get("/trend/{metric}", response_model=S.Trend)
 def get_trend(metric: str, from_: date | None = Query(None, alias="from"), to: date | None = None):
     with _db() as db:
         try:
@@ -187,7 +197,7 @@ def get_trend(metric: str, from_: date | None = Query(None, alias="from"), to: d
             _bad(e)
 
 
-@app.get("/activity")
+@app.get("/activity", response_model=S.ActivityRange)
 def get_activity(from_: date | None = Query(None, alias="from"), to: date | None = None):
     with _db() as db:
         try:
@@ -196,14 +206,14 @@ def get_activity(from_: date | None = Query(None, alias="from"), to: date | None
             _bad(e)
 
 
-@app.get("/day/{day}")
+@app.get("/day/{day}", response_model=S.DayDetail)
 def get_day(day: date):
     """Intraday view of one date: HR (5-min means), steps per hour, sleep, workouts."""
     with _db() as db:
         return explore.day_detail(db, day)
 
 
-@app.get("/training")
+@app.get("/training", response_model=S.Training)
 def get_training(from_: date | None = Query(None, alias="from"), to: date | None = None):
     with _db() as db:
         try:
@@ -212,7 +222,7 @@ def get_training(from_: date | None = Query(None, alias="from"), to: date | None
             _bad(e)
 
 
-@app.get("/workout-series/{run_id:path}")
+@app.get("/workout-series/{run_id:path}", response_model=S.WorkoutSeries)
 def get_workout_series(run_id: str):
     with _db() as db:
         r = explore.run_series(db, run_id)
@@ -221,13 +231,13 @@ def get_workout_series(run_id: str):
     return r
 
 
-@app.get("/longterm")
+@app.get("/longterm", response_model=S.LongTerm)
 def get_longterm():
     with _db() as db:
         return explore.longterm(db)
 
 
-@app.get("/ecg/{reading_id:path}")
+@app.get("/ecg/{reading_id:path}", response_model=S.Ecg)
 def get_ecg(reading_id: str):
     with _db() as db:
         r = explore.ecg_waveform(db, reading_id)
@@ -236,14 +246,14 @@ def get_ecg(reading_id: str):
     return r
 
 
-@app.get("/data")
+@app.get("/data", response_model=S.Catalog)
 def get_catalog():
     """Every table in health.db and the MCP cache, with row counts and date range."""
     with _db() as db:
         return explore.catalog(db)
 
 
-@app.get("/data/{source}/{table}")
+@app.get("/data/{source}/{table}", response_model=S.TableRows)
 def get_table(source: Literal["health", "google"], table: str, from_: date | None = Query(None, alias="from"),
               to: date | None = None, limit: int = 200, offset: int = 0, desc: bool = True):
     with _db() as db:
@@ -253,7 +263,7 @@ def get_table(source: Literal["health", "google"], table: str, from_: date | Non
             _bad(e)
 
 
-@app.get("/explain/{score}")
+@app.get("/explain/{score}", response_model=S.Explanation)
 def get_explain(score: Literal["recovery", "sleep", "strain"], date: date):
     with _db() as db:
         return queries.explain_score(db, date, score)
@@ -281,7 +291,7 @@ def _with_recompute(result, changed):
     return result
 
 
-@app.get("/annotations")
+@app.get("/annotations", response_model=list[S.Annotation])
 def list_annotations(from_: date | None = Query(None, alias="from"), to: date | None = None,
                      kind: str | None = None, status: str | None = None):
     conn = ann.connect()
@@ -291,7 +301,7 @@ def list_annotations(from_: date | None = Query(None, alias="from"), to: date | 
         conn.close()
 
 
-@app.post("/annotations", status_code=201)
+@app.post("/annotations", status_code=201, response_model=S.AnnotationChange)
 def create_annotation(body: AnnotationIn):
     conn = ann.connect()
     try:
@@ -314,17 +324,17 @@ def _set_status(ann_id, status):
     return _with_recompute(a, changed)
 
 
-@app.post("/annotations/{ann_id}/confirm")
+@app.post("/annotations/{ann_id}/confirm", response_model=S.AnnotationChange)
 def confirm_annotation(ann_id: int):
     return _set_status(ann_id, "confirmed")
 
 
-@app.post("/annotations/{ann_id}/reject")
+@app.post("/annotations/{ann_id}/reject", response_model=S.AnnotationChange)
 def reject_annotation(ann_id: int):
     return _set_status(ann_id, "rejected")
 
 
-@app.delete("/annotations/{ann_id}")
+@app.delete("/annotations/{ann_id}", response_model=S.AnnotationChange)
 def delete_annotation(ann_id: int):
     conn = ann.connect()
     try:

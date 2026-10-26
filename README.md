@@ -170,6 +170,7 @@ web/        the React + TypeScript port of the dashboard (Vite), served at /next
 backend/    FastAPI app, MCP server, health_core/ (queries, sync jobs, annotations), tests/
 scripts/    sync, Takeout import, scores and analyses (standard library only)
 docs/       scores.md (how the scores work), api.md (endpoints, MCP tools)
+tests/      pytest suite on synthetic data, golden/scores.json (the expected scores)
 data/       your data, created on first sync, never committed
 ```
 
@@ -183,6 +184,15 @@ cache and the Google tokens live in google-health-mcp's own folders
 
 `ruff check .` lints the Python code (settings in `ruff.toml`). To run it on
 every commit: `uv tool install pre-commit`, then `pre-commit install` once.
+
+`python -m pytest` (from the repo root, with pytest installed) runs the test
+suite in `tests/` on a made-up watch history that `tests/fixture_db.py` builds
+in a temporary folder, so it never touches `data/`. It includes a golden test:
+every score on that history is stored in `tests/golden/scores.json`, and any
+change to a number fails the test with a list of what moved. When a change to
+the scores is intended, rewrite the file with `UPDATE_GOLDEN=1 python -m pytest`
+and commit it with the change. GitHub Actions runs ruff and the suite on Linux
+and Windows for every push and pull request.
 
 With the API running:
 
