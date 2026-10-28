@@ -86,6 +86,24 @@ export const pick = <R>(xs: string[], map: Record<string, R>, f: (r: R) => N): (
 export const niceTicksBy = (lo: number, hi: number, step: number) =>
   Array.from({ length: Math.round((hi - lo) / step) + 1 }, (_, k) => lo + k * step);
 
+// y axis for a history chart (VO2 max, Healthspan age). On a week it hugs the
+// data, with gridlines a tenth or a fifth apart, so a change of a tenth or less
+// is easy to see. On longer ranges a flat stretch keeps at least two units, so
+// noise doesn't look like a trend; undefined leaves the chart's own fit.
+export function fitY(vals: N[], week: boolean): { min: number; max: number; ticks?: number[] } | undefined {
+  const v = vals.filter((x): x is number => x != null);
+  if (!v.length) return undefined;
+  const lo = Math.min(...v), hi = Math.max(...v);
+  if (week) {
+    const pad = Math.max((hi - lo) * 0.25, 0.1), a = lo - pad, b = hi + pad;
+    const step = [0.1, 0.2, 0.5, 1, 2, 5].find(s => s >= (b - a) / 4) ?? 10;
+    const snap = (x: number) => Math.round(x * 1e6) / 1e6;   // drop float dust before floor/ceil
+    const min = snap(Math.floor(snap(a / step)) * step), max = snap(Math.ceil(snap(b / step)) * step);
+    return { min, max, ticks: niceTicksBy(min, max, step).map(snap) };
+  }
+  return hi - lo < 1 ? { min: Math.floor(lo - 0.5), max: Math.ceil(hi + 0.5) } : undefined;
+}
+
 export interface Shade { from: string; to: string; label: string }
 
 export function shades(annotations: Annotation[] | undefined): Shade[] {

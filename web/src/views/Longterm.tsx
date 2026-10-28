@@ -1,6 +1,7 @@
 // Long-term: Healthspan age, VO2 max, weight, monthly averages, events
 // (annotations you can add, confirm and delete), ECGs and assessments.
-// #/longterm/vo2max opens the VO2 max history.
+// #/longterm/vo2max and #/longterm/healthspan open the VO2 max and Healthspan
+// age histories.
 
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { get, send } from "../api/client";
@@ -10,7 +11,7 @@ import type { ChartConfig } from "../lib/charts.js";
 import { Chart } from "../components/Chart";
 import { Hint } from "../components/Hint";
 import { followRun, refresh } from "../sync";
-import { addDays, byKey, dateList, fClock, fDay, fMonth, fShort, n0, n1, n2, pick, sgn, shades, today, xDates } from "../lib/format";
+import { addDays, byKey, dateList, fClock, fDay, fitY, fMonth, fShort, n0, n1, n2, pick, sgn, shades, today, xDates } from "../lib/format";
 import { rangeDates, useUi, type Ui } from "../ui";
 
 const HS: Record<string, string> = { vo2max: "VO2 max", rhr: "Resting HR", steps: "Steps", moderate: "Moderate activity", vigorous: "Vigorous activity",
@@ -25,6 +26,7 @@ const lower = (s: string | null | undefined) => (s || "").replace(/_/g, " ").toL
 
 export async function loadLongterm(args: string[], _q: URLSearchParams, ui: Ui) {
   if (args[0] === "vo2max") return <Vo2 lt={await get<LongtermResponse>("/longterm")} range={rangeDates(ui)} />;
+  if (args[0] === "healthspan") return <HsHistory lt={await get<LongtermResponse>("/longterm")} range={rangeDates(ui)} />;
   // annotation kinds come from the backend's fixed list
   const [lt, m] = await Promise.all([get<LongtermResponse>("/longterm"), get<Meta>("/meta").catch(() => null)]);
   return <Longterm lt={lt} kinds={m?.annotation.kinds || ["note"]} />;
@@ -82,8 +84,8 @@ function Longterm({ lt, kinds }: { lt: LongtermResponse; kinds: string[] }) {
     <>
       <div className="head"><h1>Long-term</h1></div>
       <div className="grid g2">
-        <div className="card hs"><div className="label"><Hint k="healthspan">Healthspan age</Hint></div>
-          <div className="big">{age ? n1(age.value) : "–"}<small> years{age?.referent != null ? ` · actual ${n0(+age.referent)}` : ""}</small></div>
+        <div className="card hs"><a className="hs-open" href="#/longterm/healthspan"><div className="label"><Hint k="healthspan">Healthspan age</Hint> ›</div>
+          <div className="big">{age ? n1(age.value) : "–"}<small> years{age?.referent != null ? ` · actual ${n0(+age.referent)}` : ""}</small></div></a>
           {poa ? <Kv k={<Hint k="pace_of_aging">Pace of aging</Hint>}>{n2(poa.value) + "× "}<span className="note">({poa.note || ""})</span></Kv> : null}
           <Kv k="Based on">{age?.note || "–"}</Kv>
           <div className="spacer" />
@@ -174,6 +176,7 @@ function EcgStrips({ id }: { id: string }) {
 // on the Long-term card; Healthspan averages the same daily values.
 function Vo2({ lt, range: [fr, to] }: { lt: LongtermResponse; range: [string, string] }) {
   const [ui] = useUi();
+  const week = ui.range === 7;
   const all = lt.vo2max.filter((r): r is typeof r & { vo2_max: number } => r.vo2_max != null);
   const rows = all.filter(r => r.date >= fr && r.date <= to);
   const last = all[all.length - 1], first = rows[0];
@@ -186,12 +189,10 @@ function Vo2({ lt, range: [fr, to] }: { lt: LongtermResponse; range: [string, st
   const stat = (label: ReactNode, r: { vo2_max: number } | null | undefined, sub: ReactNode) =>
     <div className="card"><div className="label">{label}</div><div className="big">{r ? n1(r.vo2_max) : "–"}</div><div className="note">{sub}</div></div>;
   const cfg = useMemo(() => {
-    const xs = xDates(fr, to, rows), map = byKey(rows);
-    // a flat week would get ticks a few hundredths apart; keep at least two units on the axis
-    const y = lo && hi && hi.vo2_max - lo.vo2_max < 1 ? { min: Math.floor(lo.vo2_max - 0.5), max: Math.ceil(hi.vo2_max + 0.5) } : undefined;
-    return { x: xs, height: 220, y, xfmt: fShort, tipx: fDay, shades: shades(lt.annotations),
-      series: [{ name: "VO2 max", type: "line" as const, connect: true, noDots: true, data: pick(xs, map, r => r.vo2_max), fmt: n1 }] };
-  }, [lt, fr, to]);   // eslint-disable-line react-hooks/exhaustive-deps
+    const xs = xDates(fr, to, rows), map = byKey(rows), data = pick(xs, map, r => r.vo2_max);
+    return { x: xs, height: 220, y: fitY(data, week), xfmt: fShort, tipx: fDay, shades: shades(lt.annotations),
+      series: [{ name: "VO2 max", type: "line" as const, connect: true, noDots: true, data, fmt: n2 }] };
+  }, [lt, fr, to, week]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       <div className="head"><a href="#/longterm" className="note">‹ Long-term</a></div>
@@ -211,6 +212,52 @@ function Vo2({ lt, range: [fr, to] }: { lt: LongtermResponse; range: [string, st
             <tr key={r.date}><td>{fDay(r.date)}</td><td className="num">{n2(r.vo2_max)}</td><td className="num">{r.d == null ? "first" : sgn(r.d)}</td><td>{lower(r.cardio_fitness_level)}</td></tr>
           )) : [<tr key="none"><td colSpan={4} className="note">No values in this range.</td></tr>]} />
         <p className="note">{hs ? <><Hint k="healthspan">Healthspan</Hint> uses the average of these daily values ({n1(hs.value)} for "{v.replace(/_/g, " ")}"), target {hs.referent}. </> : null}Run-by-run estimates are on the Long-term tab.</p></section>
+    </>
+  );
+}
+
+// Healthspan age history: the value each day's run computed (past days the
+// scores didn't run are backfilled by the backend), for the chosen variant.
+function HsHistory({ lt, range: [fr, to] }: { lt: LongtermResponse; range: [string, string] }) {
+  const [ui, setUi] = useUi();
+  const week = ui.range === 7, hs = lt.healthspan, variants = Object.keys(hs.variants);
+  const v = variants.includes(ui.hsVariant) ? ui.hsVariant : variants[0];
+  const all = hs.history.filter((r): r is typeof r & { value: number } => r.variant === v && r.value != null)
+    .map(r => ({ date: r.computed_on, value: r.value }));
+  const rows = all.filter(r => r.date >= fr && r.date <= to);
+  const last = all[all.length - 1], first = rows[0];
+  const ext = (cmp: (a: number, b: number) => boolean) => rows.reduce<typeof rows[number] | null>((b, r) => b && !cmp(r.value, b.value) ? b : r, null);
+  const lo = ext((a, b) => a < b), hi = ext((a, b) => a > b);
+  const changes = all.map((r, i) => ({ ...r, d: i ? r.value - all[i - 1].value : null })).filter(r => r.date >= fr).reverse();
+  const actual = (hs.variants[v] || []).find(r => r.metric === "healthspan_age")?.referent;
+  const stat = (label: ReactNode, r: { value: number } | null | undefined, sub: ReactNode) =>
+    <div className="card"><div className="label">{label}</div><div className="big">{r ? n1(r.value) : "–"}</div><div className="note">{sub}</div></div>;
+  const cfg = useMemo(() => {
+    const xs = xDates(fr, to, rows), map = byKey(rows), data = pick(xs, map, r => r.value);
+    return { x: xs, height: 220, y: fitY(data, week), xfmt: fShort, tipx: fDay, shades: shades(lt.annotations),
+      series: [{ name: "Healthspan age", type: "line" as const, connect: true, noDots: true, data, fmt: n2 }] };
+  }, [lt, fr, to, v, week]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <>
+      <div className="head"><a href="#/longterm" className="note">‹ Long-term</a></div>
+      <div className="head"><h1>Healthspan age</h1><span className="sub"><Hint k="hs_history">Computed daily</Hint> · years</span><span className="spacer" /><RangeSeg /></div>
+      <div className="grid g5 three">
+        {stat(<Hint k="healthspan">Current</Hint>, last, last ? <>{fShort(last.date)}{actual != null ? ` · actual ${n0(+actual)}` : ""}</> : "")}
+        {stat(<Hint k="hs_range">Youngest</Hint>, lo, lo ? fShort(lo.date) : "")}
+        {stat(<Hint k="hs_range">Oldest</Hint>, hi, hi ? fShort(hi.date) : "")}
+      </div>
+      <section><div className="card"><div className="chart-title"><h3>Course</h3><EventNote anns={lt.annotations} />
+        <span className="now">{first && last && rows.length > 1 ? sgn(last.value - first.value, 2) : ""}</span></div>
+        <div className="note csub">{rows.length ? `${rows.length} days since ${fShort(first.date)}; the change on the right is first day to today, in years.` : ""}</div>
+        <div className="seg hs-variants">
+          {variants.map(x => <button key={x} className={x === v ? "on" : ""} onClick={() => setUi({ hsVariant: x })}>{VN[x] || x}</button>)}
+        </div>
+        <Chart id="c-hsd" cfg={cfg} /></div></section>
+      <section><h2>Days</h2>
+        <Paged head={<tr><th>Day</th><th className="num">Healthspan age</th><th className="num">Change</th></tr>}
+          rows={changes.length ? changes.map(r => (
+            <tr key={r.date}><td>{fDay(r.date)}</td><td className="num">{n2(r.value)}</td><td className="num">{r.d == null ? "first" : sgn(r.d)}</td></tr>
+          )) : [<tr key="none"><td colSpan={3} className="note">No values in this range.</td></tr>]} /></section>
     </>
   );
 }

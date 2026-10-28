@@ -6,7 +6,8 @@ frozen calibration (Strain k, Recovery weights) lives in scores_config.json.
         [--recalibrate]  re-fit Strain k on the current history
         [--retune]       re-decide the Recovery weights against Google Readiness
         [--full]         rebuild the raw-data cache (scores/cache.py) from scratch
-                         instead of only the days whose data changed
+                         instead of only the days whose data changed, and
+                         recompute the whole daily Healthspan history
 """
 
 import argparse
@@ -24,6 +25,7 @@ def run(ctx, recalibrate=False, retune=False, full=False):
     recovery.compute(ctx, retune=retune)
     print()
     healthspan.compute(ctx)
+    print(f"healthspan history: {healthspan.backfill(ctx, redo=full)} days computed")
 
 
 def main(argv=None):

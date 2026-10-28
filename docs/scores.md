@@ -90,6 +90,13 @@ women, change those two values or the Healthspan age will be off.
 The years per metric are the useful part: they show which habit costs the most.
 The absolute age is only good to within several years.
 
+Each run stores that day's values, so `score_healthspan` is a daily history
+(the Healthspan age screen in the app draws it). Days the scores didn't run
+are backfilled as if they had run that day, starting two weeks after the
+analysis start. `health scores --full` or `health healthspan --history`
+recomputes the whole history, for example after the formula or older data
+changed.
+
 ## Other analyses
 
 - `run_report.py` covers every run.
