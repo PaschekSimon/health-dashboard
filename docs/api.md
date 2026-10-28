@@ -36,7 +36,7 @@ answer includes the annotations touching it (`annotations`, and `annotation_ids`
 | GET | `/workout-series/{id}` | one workout: HR (10 s), running dynamics, GPS route shape |
 | GET | `/longterm` | Healthspan (all variants), monthly averages, VO2 max, weight, ECG list, assessments, all annotations |
 | GET | `/ecg/{id}` | one ECG with its waveform |
-| GET | `/data` | every table in health.db and the MCP cache: rows, columns, date range |
+| GET | `/data` | every table in health.db and the daily cache: rows, columns, date range |
 | GET | `/data/{health\|google}/{table}?from=&to=&limit=&offset=&desc=` | raw rows (long text cut, epoch times also as local time) |
 | GET | `/annotations?from=&to=&kind=&status=` | annotations touching the range |
 | POST | `/annotations` | create (`kind`, `start`, `end`, `target`, `attrs`, `status`, `source`, `confidence`, `raw_text`, `note`) |
@@ -72,8 +72,8 @@ same numbers.
 
 ## Sync rules
 
-- A sync job runs `google-health-mcp sync` (MCP cache: daily values, sleep,
-  workouts), `health sync` (intraday samples), then `health daily-check`,
+- A sync job runs `health daily-sync` (daily cache: daily values, sleep,
+  workouts; step `mcp_cache`), `health sync` (intraday samples), then `health daily-check`,
   `run-report`, `weekly-summary` and `scores`, each as its own process of the
   same environment. Output goes to `data/logs/sync.log`.
 - Single flight: it holds `data/.sync.lock`, the same lock as `health sync-on-access`
@@ -118,3 +118,7 @@ On Linux the command is `/path/to/repo/.venv/bin/health` with `"args": ["mcp"]`.
 Tools: `get_day`, `get_trend`, `list_runs`, `get_run`, `list_annotations`,
 `add_annotation` (confirmed only when the user stated the fact), `delete_annotation`,
 `explain_score`, `sync_now`, `get_sync_status`.
+
+`get_day`, `get_trend`, `list_runs`, `get_run` and `explain_score` start a sync
+job (`reason=open`, origin `mcp`) in the background when the last successful
+one finished over 3 hours ago, so Claude's next answer has fresh data.

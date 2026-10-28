@@ -74,7 +74,7 @@ function DataTable({ source, table, t, offset, fr, to, asc }:
   return (
     <>
       <div className="head"><a href="#/data" className="note">‹ Data</a></div>
-      <div className="head"><h1>{table}</h1><span className="sub">{source === "google" ? "google-health MCP cache" : "health.db"} · {n0(t.total)} rows</span></div>
+      <div className="head"><h1>{table}</h1><span className="sub">{source === "google" ? "Google daily cache" : "health.db"} · {n0(t.total)} rows</span></div>
       <form className="form" id="flt" style={{ marginBottom: 12 }} onSubmit={filter}>
         {t.date_column ? <>
           <label>From<input type="date" name="from" defaultValue={fr} /></label><label>To<input type="date" name="to" defaultValue={to} /></label><button className="btn">Filter</button>

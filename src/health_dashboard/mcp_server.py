@@ -5,7 +5,9 @@ lets Claude record context (illness, alcohol, travel, ...) as annotations.
 
     health mcp              (= python -m health_dashboard.mcp_server)
 
-Data paths come from the environment (config.get_paths).
+Data paths come from the environment (config.get_paths). A question about the
+data starts a full sync in the background when the last one is over 3 hours
+old, so the next answer is fresh without asking for a sync.
 
 Logs go to stderr only (Claude Desktop keeps them in mcp-server-health-app.log);
 stdout carries the protocol, so nothing here may print to it.
@@ -16,6 +18,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timedelta
 
 try:  # mcp 2.x renamed FastMCP to MCPServer; same decorator API
     from mcp.server.mcpserver import MCPServer as FastMCP
@@ -28,6 +31,24 @@ from .core import jobs, queries
 
 mcp = FastMCP("health-app")
 log = logging.getLogger("health-app")
+AUTO_SYNC_AFTER = timedelta(hours=3)
+
+
+def _sync_if_stale():
+    """Start a sync job (it runs detached) if none succeeded in AUTO_SYNC_AFTER
+    and none is running. Never fails the question it was called for."""
+    try:
+        paths = get_paths()
+        conn = jobs.connect(paths)
+        try:
+            last = jobs.last_successful_sync(conn)
+        finally:
+            conn.close()
+        if (last is None or datetime.now() - last > AUTO_SYNC_AFTER) and not jobs.lock_held(paths):
+            run = jobs.start_sync("open", origin="mcp")
+            log.info("data older than %s: started sync run %s", AUTO_SYNC_AFTER, run.get("id"))
+    except Exception:
+        log.exception("could not start the background sync")
 
 
 def _recompute_if(changed):
@@ -41,6 +62,7 @@ def get_day(date: str) -> dict:
     a strain target, steps, this week's running (km, minutes, TRIMP and
     easy_pct: share of run time at or below the top of Z2), the daily-check warning
     (AMBER/RED) and the annotations (illness, alcohol, ...) touching that day."""
+    _sync_if_stale()
     with queries.Db() as db:
         try:
             return queries.dashboard(db, date)
@@ -55,6 +77,7 @@ def get_trend(metric: str, date_from: str, date_to: str) -> dict:
     ids of annotations touching it). Metrics: recovery, hrv_ms, rhr,
     sleep_performance, asleep_min, sleep_min, strain, steps, google_hrv_rmssd,
     nrem_hr, breathing, skin_temp, spo2, vo2max, weight, trimp, google_readiness."""
+    _sync_if_stale()
     with queries.Db() as db:
         try:
             return queries.trend(db, metric, date_from, date_to)
@@ -69,6 +92,7 @@ def list_runs(date_from: str, date_to: str) -> dict:
     recovery, plus annotations (e.g. run_intent) touching them, and a
     `running` summary (runs, km, minutes, TRIMP, easy_pct). Use the `id` with
     get_run."""
+    _sync_if_stale()
     with queries.Db() as db:
         try:
             return queries.runs(db, date_from, date_to)
@@ -83,6 +107,7 @@ def get_run(workout_id: str) -> dict:
     minutes per HR zone Z1-Z5 as the app shows them (hr_zones; Z3/Z4 split
     Google's vigorous zone in the middle), and annotations targeting it or its
     day."""
+    _sync_if_stale()
     with queries.Db() as db:
         r = queries.run_detail(db, workout_id)
     return r or {"error": f"no workout with id {workout_id}"}
@@ -158,6 +183,7 @@ def explain_score(date: str, score: str) -> dict:
     score: recovery (z-scores of HRV, resting HR, sleep, breathing x weights,
     penalties, baseline size), sleep (Sufficiency/Consistency/Efficiency/Calm and
     the sleep need) or strain (load, cardio vs muscular, k, workouts)."""
+    _sync_if_stale()
     with queries.Db() as db:
         try:
             return queries.explain_score(db, date, score)
@@ -167,7 +193,7 @@ def explain_score(date: str, score: str) -> dict:
 
 @mcp.tool()
 def sync_now(wait_seconds: int = 40) -> dict:
-    """Fetch the newest data from Google now (MCP cache + intraday samples) and
+    """Fetch the newest data from Google now (daily cache + intraday samples) and
     recompute all scores. Only one sync runs at a time; if one is running this
     returns it. Waits up to wait_seconds for it to finish, then returns the
     current status (a full sync usually takes a few minutes; ask again with

@@ -1,11 +1,12 @@
 """Sync and recompute jobs, recorded in the `sync_runs` table of health.db.
 
 A sync job runs, in order:
-  mcp_cache       health_dashboard mcp-sync  (google-health-mcp sync: daily values, sleep, workouts in the MCP's cache)
+  mcp_cache       health_dashboard daily-sync  (daily values, sleep, workouts into the daily cache)
   health_sync     health_dashboard sync   (intraday samples into health.db)
   daily_check, run_report, weekly_summary, run_scores   (derived tables)
-each as its own process of this environment's Python (the google-health-mcp
-package, which holds the Google login, is installed in it). A recompute job
+each as its own process of this environment's Python. (The step keeps the
+name mcp_cache from when google-health-mcp filled that cache; it is stored in
+sync_runs and shown by the API.) A recompute job
 runs only the derived steps (after a confirmed alcohol or illness annotation
 changed).
 
@@ -58,7 +59,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 
 # step name -> arguments of `python -m health_dashboard`
 STEP_ARGS = {
-    "mcp_cache": ["mcp-sync"],
+    "mcp_cache": ["daily-sync"],
     "health_sync": ["sync"],
     "daily_check": ["daily-check"],
     "run_report": ["run-report"],
@@ -157,7 +158,7 @@ def _expire(conn, paths=None):
 def last_successful_sync(conn):
     """Latest finish of a successful full sync (our sync_runs). The
     SessionStart hook's .last_sync stamp doesn't count: that run only does
-    health_sync.py, so the MCP cache and the scores would stay stale."""
+    health_sync.py, so the daily cache and the scores would stay stale."""
     row = conn.execute(f"SELECT max(finished) FROM sync_runs WHERE status IN ('ok', 'partial') AND reason IN "
                        f"({', '.join('?' * len(SYNC_REASONS))})", SYNC_REASONS).fetchone()
     return datetime.fromisoformat(row[0]) if row and row[0] else None
@@ -209,7 +210,7 @@ def start_sync(reason, origin="api", paths=None):
                 run["note"] = "a sync is already running; this is its id"
                 return run
             rid = _insert(conn, reason, "busy", origin, finished=_now(),
-                          error="another sync (SessionStart hook / MCP auto-sync / recompute) holds .sync.lock")
+                          error="another sync (SessionStart hook / recompute / Takeout import) holds .sync.lock")
             return get_run(conn, rid, paths)
         try:
             rid = _insert(conn, reason, "running", origin)

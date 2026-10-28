@@ -22,7 +22,7 @@ class Context:
     watch_start: date             # first day of watch data
     exclusions: Exclusions
     health: sqlite3.Connection    # data/health.db
-    mcp: sqlite3.Connection       # the google-health MCP's cache
+    mcp: sqlite3.Connection       # the daily cache (google_health.db)
     today: date = field(default_factory=date.today)
     cache: dict = field(default_factory=dict)  # per-run caches, e.g. scores.common.minute_hr
 

@@ -1,6 +1,6 @@
 """Import the Google Health Takeout types that the API sync does not cover.
 
-health_sync.py and the google-health MCP already store heart rate, HRV, SpO2,
+health_sync.py and the daily sync (google/) already store heart rate, HRV, SpO2,
 steps, distance, energy, zones, sleep stages, daily summaries, workouts and
 routes. The Takeout export adds sleep scores, Daily Readiness, stress (EDA and
 body responses), cardio load, per-minute skin temperature, breathing quality,
