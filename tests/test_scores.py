@@ -110,3 +110,30 @@ def test_fixture_is_deterministic(fixture_data, tmp_path):
     d = fixture_data.start + timedelta(days=3)
     assert len(day_rows(fixture_data.health_db, d)) > 30000
     assert day_rows(longer.health_db, d) == day_rows(fixture_data.health_db, d)
+
+
+def test_healthspan_history_is_backfilled(fixture_data, tmp_path):
+    """Past days without a run get the value a run on that day would have
+    written; a second backfill has nothing left to do."""
+    import shutil
+    from dataclasses import replace
+
+    from conftest import fixture_context
+    from health_dashboard.scores import healthspan
+    for p in (fixture_data.health_db, fixture_data.mcp_db):
+        shutil.copy(p, tmp_path / p.name)
+    fx = replace(fixture_data, dir=tmp_path, health_db=tmp_path / fixture_data.health_db.name,
+                 mcp_db=tmp_path / fixture_data.mcp_db.name)
+    with fixture_context(fx) as ctx:
+        healthspan.compute(ctx, verbose=False)
+        n = healthspan.backfill(ctx)
+        again = healthspan.backfill(ctx)
+        first = ctx.analysis_start + timedelta(healthspan.HISTORY_MIN_DAYS)
+        hist = dict(ctx.health.execute("SELECT computed_on, value FROM score_healthspan "
+                                       "WHERE metric = 'healthspan_age' AND variant = 'all'").fetchall())
+        day = first + timedelta(3)
+        res, _, _ = healthspan.compute(ctx, verbose=False, on=day)
+    assert n == (fx.today - first).days and again == 0
+    assert sorted(hist) == [(first + timedelta(i)).isoformat() for i in range(n + 1)]
+    assert hist[day.isoformat()] == pytest.approx(res["all"]["age"])
+    assert len(set(round(v, 6) for v in hist.values())) > 1

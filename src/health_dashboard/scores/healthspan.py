@@ -9,10 +9,14 @@ Variants: "all" (all available data, WHOOP uses 6 months), "excl_illness"
 (illness annotations dropped) and "last30" (last 30 days). Pace of Aging =
 (0.5 + (age_last30 - age_all)) / 0.5, clamped to -1.0x .. 3.0x.
 
-    python -m health_dashboard healthspan
+    python -m health_dashboard healthspan [--history]
 Writes score_healthspan in health.db (one row per run date, variant and metric).
+Days the scores did not run are filled in afterwards as if they had run that
+day (backfill), so the history has one value per day; --history recomputes
+all of it.
 """
 
+import argparse
 import math
 import statistics
 from datetime import date, timedelta
@@ -32,6 +36,7 @@ REF = {"vo2max": 48.0, "rhr": 60.0, "steps": 8000, "moderate": 150, "vigorous": 
        "strength": 40, "sleep_h": (7.0, 9.0), "sri": 72.0}
 VO2_CAP = 60.0                 # ~elite level for men 20-29: no extra years beyond
 RHR_FLOOR = 45.0               # Zhang: linear from 45 bpm
+HISTORY_MIN_DAYS = 14          # backfilled history starts once two weeks of data are in
 
 
 def interp_lnhr(x, pts):
@@ -139,13 +144,17 @@ def evaluate(age, x):
     return yrs, adj, age + total
 
 
-def compute(ctx, verbose=True):
+def compute(ctx, verbose=True, on=None):
+    """Healthspan as computed on day `on` (default today), from the data up to
+    the day before."""
+    on = on or ctx.today
     age, src = sc.age_years(ctx.mcp)
     start = ctx.analysis_start                      # first full watch days skipped
-    last = ctx.today - timedelta(1)                 # last complete day
+    last = on - timedelta(1)                        # last complete day
+    first30 = max(start, last - timedelta(29))      # no days from before the watch
     variants = {"all": (start, last, False), "excl_illness": (start, last, True),
-                "last30": (last - timedelta(29), last, False),
-                "last30_excl_illness": (last - timedelta(29), last, True)}
+                "last30": (first30, last, False),
+                "last30_excl_illness": (first30, last, True)}
     res = {}
     for name, (d0, d1, drop) in variants.items():
         x = inputs(ctx, d0, d1, drop)
@@ -156,7 +165,7 @@ def compute(ctx, verbose=True):
         return max(-1.0, min(3.0, (0.5 + (res[recent]["age"] - res[base]["age"])) / 0.5))
 
     paces = {"all": pace("all", "last30"), "excl_illness": pace("excl_illness", "last30_excl_illness")}
-    today = ctx.today.isoformat()
+    today = on.isoformat()
     rows = []
     for name, r in res.items():
         for k in UNITS:
@@ -178,6 +187,20 @@ def compute(ctx, verbose=True):
     return res, paces, age
 
 
+def backfill(ctx, redo=False):
+    """Compute Healthspan for each past day the scores did not run (all past
+    days with redo), so the history has one value per day. Runs after
+    compute(), which creates the table and writes today's row. Returns the
+    number of days computed."""
+    have = set() if redo else {d for (d,) in ctx.health.execute("SELECT DISTINCT computed_on FROM score_healthspan")}
+    first = ctx.analysis_start + timedelta(HISTORY_MIN_DAYS)
+    days = [first + timedelta(i) for i in range((ctx.today - first).days)]
+    todo = [d for d in days if d.isoformat() not in have]
+    for d in todo:
+        compute(ctx, verbose=False, on=d)
+    return len(todo)
+
+
 def report(age, src, res, paces):
     print(f"HEALTHSPAN  chronological age {age:.0f} ({src})")
     for name in ("all", "excl_illness"):
@@ -193,8 +216,12 @@ def report(age, src, res, paces):
 
 
 def main(argv=None):
+    ap = argparse.ArgumentParser(description="Healthspan age and Pace of Aging")
+    ap.add_argument("--history", action="store_true", help="recompute the whole daily history, not only missing days")
+    args = ap.parse_args(argv)
     with Context.open() as ctx:
         compute(ctx)
+        print(f"history: {backfill(ctx, redo=args.history)} days computed")
 
 
 if __name__ == "__main__":

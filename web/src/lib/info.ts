@@ -98,5 +98,8 @@ export const INFO: Record<string, [string, string?]> = {
     "Healthspan uses the average of these daily values over its period, so it reads lower than today's value while VO2 max is rising."],
   vo2_level: ["Google's cardio fitness level: your VO2 max compared with people of your age and sex.",
     "From low to high: poor, fair, average, good, very good, excellent."],
+  hs_history: ["Healthspan age as it was computed each day, from your data up to the day before, for the period chosen under the chart. Days the scores didn't run are filled in afterwards the same way.",
+    "It moves slowly: the all-days value averages everything since the watch started, so one day shifts it by hundredths of a year. The last-30-days values react faster."],
+  hs_range: ["Youngest and oldest healthspan age in the selected range, with the first day it was reached."],
   vo2_range: ["Lowest and highest daily value in the selected range, with the first day it was reached."],
 };
