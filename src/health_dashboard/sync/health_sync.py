@@ -15,7 +15,9 @@ package is a dependency of this one, and its login lives in
     ... sync --types heart-rate     # only some types
 
 Each run resumes from the last synced day per type, re-reading the last two
-days because the watch uploads late. Nothing before the first watch day is
+days because the watch uploads late. Requests go out in parallel, gzipped and
+spaced to stay inside Google's per-user quota; rows are still written a type
+and a window at a time, in order. Nothing before the first watch day is
 read, and each run deletes the phone's step days before it from the MCP's
 cache (`google-health-mcp sync --since` would bring them back). Rows are keyed by time and source, so
 re-reading never duplicates. Times are stored as UTC epoch seconds, with the
@@ -23,11 +25,23 @@ local UTC offset in seconds beside them for grouping by local day.
 """
 
 import argparse
+import gzip
+import io
 import sqlite3
 import sys
+import threading
+import time
+import urllib.request
+import urllib.response
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
-from google_health_mcp.api import GOOGLE_TYPES, daily_roll_up, list_google_data_points
+from google_health_mcp.api import (
+    GOOGLE_TYPES,
+    HealthRateLimitError,
+    daily_roll_up,
+    list_google_data_points,
+)
 from google_health_mcp.api import _interval as _interval_type
 from google_health_mcp.api import _sample as _sample_type
 
@@ -35,6 +49,12 @@ from ..config import get_paths
 from ..settings import load_settings
 
 OVERLAP_DAYS = 2
+# Google allows an unverified app 2.5 requests a second per user, so request
+# starts are spaced this far apart however many run at once.
+MIN_REQUEST_GAP = 0.4
+WORKERS = 6
+# Seconds to wait before re-reading a window Google answered with 429.
+RATE_LIMIT_WAITS = (5, 15, 30)
 # MCP cache tables the phone fills on its own (steps, distance, calories)
 PHONE_TABLES = ("activity",)
 
@@ -261,19 +281,24 @@ for _spec in (
     GOOGLE_TYPES.setdefault(_spec.path, _spec)
 
 #: API data type -> (table, row builder, column count, days per request, how to
-#: read it). Dense types go a day at a time; sparse ones take a month per request.
-#: The calorie-zone family refuses `list`, so it is read as a daily rollup.
+#: read it). Heart rate goes a day at a time (tens of thousands of points a day),
+#: most per-minute types a week (a few thousand points, one or two pages),
+#: sparse ones a month per request. Activity level and active minutes stay at a
+#: day: measured, Google answers a multi-day request for them with different
+#: minutes than the same days asked one by one (about 2000 of 9500 activity-level
+#: rows a week differ), while the other types answer identically. The
+#: calorie-zone family refuses `list`, so it is read as a daily rollup.
 TYPES = {
     "heart-rate": ("hr_samples", rows_heart_rate, 4, 1, "list"),
-    "steps": ("steps_minute", rows_steps, 5, 1, "list"),
-    "distance": ("distance_minute", rows_distance, 5, 1, "list"),
+    "steps": ("steps_minute", rows_steps, 5, 7, "list"),
+    "distance": ("distance_minute", rows_distance, 5, 7, "list"),
     "activity-level": ("activity_level_minute", rows_activity_level, 5, 1, "list"),
-    "heart-rate-variability": ("hrv_samples", rows_hrv, 6, 1, "list"),
-    "oxygen-saturation": ("spo2_samples", rows_spo2, 4, 1, "list"),
-    "active-energy-burned": ("active_energy_minute", rows_active_energy, 5, 1, "list"),
+    "heart-rate-variability": ("hrv_samples", rows_hrv, 6, 7, "list"),
+    "oxygen-saturation": ("spo2_samples", rows_spo2, 4, 7, "list"),
+    "active-energy-burned": ("active_energy_minute", rows_active_energy, 5, 7, "list"),
     "active-minutes": ("active_minutes_minute", rows_active_minutes, 6, 1, "list"),
-    "active-zone-minutes": ("azm_minute", rows_azm, 6, 1, "list"),
-    "time-in-heart-rate-zone": ("hr_zone_minute", rows_hr_zone, 5, 1, "list"),
+    "active-zone-minutes": ("azm_minute", rows_azm, 6, 7, "list"),
+    "time-in-heart-rate-zone": ("hr_zone_minute", rows_hr_zone, 5, 7, "list"),
     "sedentary-period": ("sedentary_periods", rows_sedentary, 4, 7, "list"),
     "altitude": ("altitude_minute", rows_altitude, 5, 7, "list"),
     "swim-lengths-data": ("swim_lengths", rows_swim_lengths, 5, 7, "list"),
@@ -287,25 +312,82 @@ TYPES = {
 }
 
 
-def sync_type(conn, data_type: str, since: date | None, today: date, first_day: date) -> int:
-    """Read one type into health.db. Without `since` it resumes after the last
-    synced day, or starts at `first_day` (the first watch day) on a first run."""
-    table, build, ncols, window, method = TYPES[data_type]
-    fetch = daily_roll_up if method == "rollup" else list_google_data_points
+class GoogleTransport(urllib.request.BaseHandler):
+    """Every HTTPS request this process sends: asks for gzip (a page of heart
+    rate is about 3 MB of JSON and 50 kB gzipped) and starts at most one
+    request per `gap` seconds across all threads. Installed as urllib's opener,
+    so the MCP's client, which calls urlopen, goes through it unchanged."""
+
+    handler_order = 400  # before urllib's own: our User-Agent stays, error bodies arrive unzipped
+
+    def __init__(self, gap: float = MIN_REQUEST_GAP):
+        self.gap = gap
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def https_request(self, req):
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next)
+            self._next = start + self.gap
+        if start > now:
+            time.sleep(start - now)
+        req.add_header("Accept-Encoding", "gzip")
+        req.add_header("User-Agent", "health-dashboard (gzip)")  # Google wants "gzip" in it too
+        return req
+
+    def https_response(self, req, resp):
+        if resp.headers.get("Content-Encoding") != "gzip":
+            return resp
+        try:
+            body = gzip.decompress(resp.read())
+        finally:
+            resp.close()
+        unzipped = urllib.response.addinfourl(io.BytesIO(body), resp.headers, resp.url, resp.code)
+        unzipped.msg = resp.msg
+        return unzipped
+
+
+def windows(since: date, today: date, days: int):
+    """(first, last) day pairs covering since..today, `days` at a time."""
+    day = since
+    while day <= today:
+        last = min(day + timedelta(days=days - 1), today)
+        yield day, last
+        day = last + timedelta(days=1)
+
+
+def start_day(conn, data_type: str, since: date | None, first_day: date) -> date:
+    """Without `since`, resume after the last synced day minus the overlap, or
+    start at `first_day` (the first watch day) on a first run."""
     if since is None:
         row = conn.execute(
             "SELECT synced_through FROM sync_state WHERE data_type = ?", (data_type,)
         ).fetchone()
         since = (date.fromisoformat(row[0]) - timedelta(days=OVERLAP_DAYS)) if row else first_day
-    since = max(since, first_day)
+    return max(since, first_day)
+
+
+def fetch(data_type: str, first: date, last: date) -> list[dict]:
+    """Every point of one type for the days first..last, waiting out a 429."""
+    read = daily_roll_up if TYPES[data_type][4] == "rollup" else list_google_data_points
+    for wait in (*RATE_LIMIT_WAITS, None):
+        try:
+            return read(data_type, first, last + timedelta(days=1))
+        except HealthRateLimitError:
+            if wait is None:
+                raise
+            time.sleep(wait)
+
+
+def store(conn, data_type: str, results) -> int:
+    """Write one type's windows in order, committing and moving sync_state on
+    after each, so a failed window keeps the ones before it. `results` yields
+    (last day, points); an error it raises stops this type there."""
+    table, build, ncols = TYPES[data_type][:3]
     sql = f"INSERT OR REPLACE INTO {table} VALUES ({', '.join('?' * ncols)})"
     total = 0
-    day = since
-    # A day per request for dense types keeps a failed run's loss to one day and
-    # the heart-rate pages (tens of thousands of points a day) bounded.
-    while day <= today:
-        last = min(day + timedelta(days=window - 1), today)
-        points = fetch(data_type, day, last + timedelta(days=1))
+    for last, points in results:
         conn.executemany(sql, build(points))
         conn.execute(
             "INSERT OR REPLACE INTO sync_state VALUES (?, ?, ?)",
@@ -313,8 +395,32 @@ def sync_type(conn, data_type: str, since: date | None, today: date, first_day: 
         )
         conn.commit()
         total += len(points)
-        day = last + timedelta(days=1)
     return total
+
+
+def sync_types(conn, types, since: date | None, today: date, first_day: date,
+               workers: int = WORKERS):
+    """Read `types` into health.db. Every window of every type is fetched in
+    parallel, and each type is stored in order as its windows arrive, on this
+    thread (the only one touching the database). Yields (type, points, error)."""
+    with ThreadPoolExecutor(workers) as pool:
+        pending = {
+            data_type: [
+                (last, pool.submit(fetch, data_type, first, last))
+                for first, last in windows(start_day(conn, data_type, since, first_day),
+                                           today, TYPES[data_type][3])
+            ]
+            for data_type in types
+        }
+        for data_type in types:
+            futures = pending[data_type]
+            try:
+                n, error = store(conn, data_type, ((last, f.result()) for last, f in futures)), None
+            except Exception as e:  # keep going with the other types
+                n, error = None, e
+                for _, f in futures:
+                    f.cancel()
+            yield data_type, n, error
 
 
 def prune_before_watch(mcp_db, first_day: date) -> int:
@@ -344,17 +450,16 @@ def main(argv=None) -> int:
 
     paths = get_paths()
     first_day = load_settings(paths).watch_start
+    urllib.request.install_opener(urllib.request.build_opener(GoogleTransport()))
     conn = sqlite3.connect(paths.health_db)
     conn.executescript(SCHEMA)
-    today = date.today()
     failed = False
-    for data_type in args.types:
-        try:
-            n = sync_type(conn, data_type, args.since, today, first_day)
-            print(f"{data_type:24} {n:>9} points")
-        except Exception as e:  # keep going with the other types
+    for data_type, n, error in sync_types(conn, args.types, args.since, date.today(), first_day):
+        if error is None:
+            print(f"{data_type:24} {n:>9} points", flush=True)
+        else:
             failed = True
-            print(f"{data_type:24} FAILED: {e}", file=sys.stderr)
+            print(f"{data_type:24} FAILED: {error}", file=sys.stderr, flush=True)
     conn.close()
     try:
         if n := prune_before_watch(paths.mcp_db, first_day):
