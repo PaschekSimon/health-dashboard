@@ -171,3 +171,27 @@ def test_transport_spaces_requests_across_threads():
         t.join()
     starts.sort()
     assert starts[-1] - starts[0] >= 5 * 0.05 * 0.9
+
+
+def test_mcp_sync_replays_each_answer_once_then_asks_google():
+    from health_dashboard.sync import mcp_sync
+
+    live = []
+
+    def google(path, params, body=None):
+        live.append(path)
+        return {"path": path, "n": len(live)}
+    answers = mcp_sync.Answers()
+    record = mcp_sync.recording(google, answers)
+    record("a", {"x": 1, "y": 2}, {"z": [1]})
+    record("a", {"x": 1, "y": 2}, {"z": [1]})
+    assert live == ["a", "a"]
+
+    replay = mcp_sync.replaying(google, answers)
+    # Same request with params in another order: answered from pass 1, in order.
+    assert replay("a", {"y": 2, "x": 1}, {"z": [1]})["n"] == 1
+    assert replay("a", {"x": 1, "y": 2}, {"z": [1]})["n"] == 2
+    assert live == ["a", "a"]
+    # Used up, or never asked before: goes to Google.
+    assert replay("a", {"x": 1, "y": 2}, {"z": [1]})["n"] == 3
+    assert replay("b", {}, None)["n"] == 4
