@@ -12,8 +12,8 @@ For every watch running workout:
     are left out so the HR lag at the start doesn't bias the first half
   * HRR60 / HRR120 = HR at the end of the run minus HR 60 / 120 s later,
     marked unreliable if there is no HR sample within 5 s of either point
-And Banister TRIMP for every workout (running, football, table tennis,
-strength, walks, ...).
+And Banister TRIMP and minutes per HR zone for every workout (running,
+football, table tennis, strength, walks, ...).
 
 Speed and distance come from the per-second running samples of the Takeout
 (takeout_run_samples), else from the GPS track (TCX distance, scaled to the
@@ -164,14 +164,19 @@ def hr_at(ctx, t):
     return row[0] if row else None
 
 
+def add_zone_minutes(row, hr, zones):
+    """min_light .. min_peak: minutes of hr ((t, bpm, seconds) points) in each Google zone."""
+    for z in ("LIGHT", "MODERATE", "VIGOROUS", "PEAK"):
+        row[f"min_{z.lower()}"] = sum(d for _, b, d in hr if bl.zone_of(b, zones) == z) / 60
+
+
 def analyse_run(ctx, w, row):
     t0, t1, pauses = run_window(w)
     zones = bl.hr_zones(ctx.health, w["day"])
     hr = durations(bl.hr_series(ctx, t0, t1), t1)
     hr = [(t, b, d) for t, b, d in hr if moving(t, pauses)]
     total = sum(d for _, _, d in hr) or 1
-    for z in ("LIGHT", "MODERATE", "VIGOROUS", "PEAK"):
-        row[f"min_{z.lower()}"] = sum(d for _, b, d in hr if bl.zone_of(b, zones) == z) / 60
+    add_zone_minutes(row, hr, zones)
     row["first_boundary"] = zones["MODERATE"][0]
     row["pct_below_first"] = 100 * sum(d for _, b, d in hr if b < zones["MODERATE"][0]) / total
     row["pct_below_vigorous"] = 100 * sum(d for _, b, d in hr if b < zones["VIGOROUS"][0]) / total
@@ -242,6 +247,7 @@ def run(ctx):
             hr = durations(bl.hr_series(ctx, t0, t1), t1)
             total = sum(d for _, _, d in hr) or 1
             row["avg_hr"] = sum(b * d for _, b, d in hr) / total
+            add_zone_minutes(row, hr, bl.hr_zones(health, w["day"]))
         rows.append(row)
 
     cols = list(rows[0])

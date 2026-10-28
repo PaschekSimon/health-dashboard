@@ -112,6 +112,7 @@ const fT = (v: number) => `${Math.floor(v / 60)}:${pad2(Math.round(v % 60))}`;
 // the parts of Google's metrics summary shown here (the API passes it on as is)
 interface MetricsSummary {
   elevationGainMillimeters?: number;
+  activeZoneMinutes?: string;
   mobilityMetrics?: { avgCadenceStepsPerMinute?: number; avgStrideLengthMillimeters?: number; avgVerticalOscillationMillimeters?: number;
     avgVerticalRatio?: number; avgGroundContactTimeDuration?: string };
 }
@@ -125,18 +126,23 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
   // first bpm above a zone.
   const zoneBpm = (z: RunDetail["hr_zones"]["zones"][number]) => z.from_bpm == null ? (z.to_bpm != null ? `< ${z.to_bpm}` : null)
     : z.to_bpm == null ? `${z.from_bpm}+` : `${z.from_bpm}–${z.to_bpm - 1}`;
-  const pace = a.km && a.minutes != null && PACED.has(a.type) ? a.minutes * 60 / a.km : null;
+  // pace, cadence, efficiency and running form only mean something for a run;
+  // other workouts get a card with what Google records for every type instead
+  const run = a.type === "RUNNING";
+  const pace = run && a.km && a.minutes != null ? a.minutes * 60 / a.km : null;
   const splits = g?.km_splits || [];
   const splitHr = splits.some(k => k.avg_hr != null);
   // pace, heart rate and cadence share one time axis; walking breaks (cadence
   // under a jog) are shaded on all three and left out of the running figures
   const hr = s ? s.hr.filter(p => p.s >= 0).map(p => ({ s: p.s, v: p.bpm })) : [];
-  const paceS = s?.pace || [], cadS = s?.cadence || [], walks = s?.walks || [];
+  const paceS = run ? s?.pace || [] : [], cadS = run ? s?.cadence || [] : [], walks = run ? s?.walks || [] : [];
   const walking = (x: number) => walks.some(w => x >= w.from && x < w.to);
   const walkS = walks.reduce((t, w) => t + w.to - w.from, 0);
   const runPace = paceS.filter(p => p.v && !walking(p.s)).map(p => 1000 / p.v!);   // speeds, averaged as speeds
   const runCad = cadS.filter(p => !walking(p.s)).map(p => p.v);
   const runOnly = walks.length ? `, walking breaks shaded (${fDur(walkS)} in total) and left out of the average` : "";
+  const elapsed = g?.start_time && g.end_time ? (Date.parse(g.end_time) - Date.parse(g.start_time)) / 1000 : null;
+  const paused = elapsed != null && g?.active_seconds != null ? elapsed - g.active_seconds : null;
 
   // time ticks on whole minutes, about one per 90 px of the chart card
   const box = useRef<HTMLDivElement>(null);
@@ -178,17 +184,19 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
     <>
       <div className="head"><a href="#/training" className="note">‹ Training</a></div>
       <div className="head"><h1>{a.name}</h1><span className="sub">{typeName(a.type)} · {fDay(a.date)}{g?.start_time ? " · " + fClock(g.start_time) : ""}</span></div>
-      <div className="grid g5">
-        <div className="card"><div className="label">Distance</div><div className="big">{a.km ? n2(a.km) : "–"}<small>{a.km ? " km" : ""}</small></div></div>
+      <div className={run ? "grid g5" : "grid g5 three"}>
+        {run ? <div className="card"><div className="label">Distance</div><div className="big">{a.km ? n2(a.km) : "–"}<small>{a.km ? " km" : ""}</small></div></div> : null}
         <div className="card"><div className="label">Time</div><div className="big">{fDur(a.minutes != null ? a.minutes * 60 : null)}</div></div>
-        <div className="card"><div className="label">Pace</div><div className="big">{fPace(pace)}<small>{pace ? " /km" : ""}</small></div></div>
+        {run ? <div className="card"><div className="label">Pace</div><div className="big">{fPace(pace)}<small>{pace ? " /km" : ""}</small></div></div> : null}
         <div className="card"><div className="label">Avg HR</div><div className="big">{n0(a.avg_hr)}<small> bpm</small></div><div className="note">max {n0(a.max_hr)}</div></div>
         <div className="card"><div className="label"><Hint k="strain">Strain</Hint></div><div className="big">{n1(w.strain)}</div><div className="note"><Hint k="trimp">TRIMP</Hint> {n0(a.trimp)}</div></div>
       </div>
       <section><div className="card runcharts" ref={box}>
-        <div className="chart-title"><h3>Pace</h3><span className="now">{runPace.length ? fPace(1000 / mean(runPace)!) + " /km" : ""}</span></div>
-        <div className="note csub">{paceS.length ? `min/km over 30 s, ${PACE_SRC[s!.pace_source || ""] || ""}${runOnly}` : "No distance samples for this workout."}</div>
-        {paceS.length && cfg?.pace ? <Chart id="c-pace" cfg={cfg.pace} /> : null}
+        {run ? <>
+          <div className="chart-title"><h3>Pace</h3><span className="now">{runPace.length ? fPace(1000 / mean(runPace)!) + " /km" : ""}</span></div>
+          <div className="note csub">{paceS.length ? `min/km over 30 s, ${PACE_SRC[s!.pace_source || ""] || ""}${runOnly}` : "No distance samples for this workout."}</div>
+          {paceS.length && cfg?.pace ? <Chart id="c-pace" cfg={cfg.pace} /> : null}
+        </> : null}
         <div className="chart-title"><h3>Heart rate</h3><span className="now">{hr.length ? n0(mean(hr.map(p => p.v))) + " bpm" : ""}</span></div>
         {hr.length ? (cfg?.hr ? <Chart id="c-whr" cfg={cfg.hr} /> : null) : <div id="c-whr"><div className="empty">No heart-rate samples.</div></div>}
         {cadS.length ? <>
@@ -197,11 +205,11 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
           {cfg?.cad ? <Chart id="c-cad" cfg={cfg.cad} /> : null}
         </> : null}
       </div></section>
-      <section><div className="grid g3">
+      <section><div className={run ? "grid g3" : "grid g2"}>
         <div className="card"><h3><Hint k="zones">Heart rate zones</Hint></h3>
           {w.hr_zones.zones.map(z => { const bpm = zoneBpm(z);
             return <Kv key={z.zone} k={<>{z.zone}{bpm ? <> <span className="note">{bpm} bpm</span></> : null}</>}>{z.minutes != null ? `${n1(z.minutes)} min · ${pct(z.pct)}` : "–"}</Kv>; })}</div>
-        <div className="card"><h3>Efficiency</h3>
+        {run ? <><div className="card"><h3>Efficiency</h3>
           <Kv k={<Hint k="drift">Aerobic decoupling</Hint>}>{a.decoupling_pct != null ? sgn(a.decoupling_pct, 1) + "%" : "–"}</Kv>
           <Kv k={<Hint k="ef">Efficiency factor</Hint>}>{n2(a.ef)}</Kv>
           <Kv k={<Hint k="hrr">HR recovery 60 s</Hint>}>{a.hrr60 != null ? n0(a.hrr60) + " bpm" : "–"}</Kv>
@@ -216,7 +224,15 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
           <Kv k={<Hint k="vert_ratio">Vertical ratio</Hint>}>{mob.avgVerticalRatio ? n1(mob.avgVerticalRatio) + "%" : "–"}</Kv>
           <Kv k={<Hint k="gct">Ground contact</Hint>}>{mob.avgGroundContactTimeDuration ? n0(parseFloat(mob.avgGroundContactTimeDuration) * 1000) + " ms" : "–"}</Kv>
           <Kv k="Elevation gain">{ms.elevationGainMillimeters ? n0(ms.elevationGainMillimeters / 1000) + " m" : "–"}</Kv>
-          <Kv k="Calories">{n0(g?.calories)}</Kv><Kv k="Steps">{n0(g?.steps)}</Kv></div>
+          <Kv k="Calories">{n0(g?.calories)}</Kv><Kv k="Steps">{n0(g?.steps)}</Kv></div></>
+        : <div className="card"><h3>Workout</h3>
+          <Kv k="Start – end">{g?.start_time ? `${fClock(g.start_time)}–${fClock(g.end_time)}` : "–"}</Kv>
+          {paused != null && paused >= 30 ? <Kv k="Paused">{fDur(paused)}</Kv> : null}
+          <Kv k="Calories">{g?.calories != null ? n0(g.calories) + " kcal" : "–"}</Kv>
+          <Kv k={<Hint k="azm">Active Zone Minutes</Hint>}>{ms.activeZoneMinutes ?? "–"}</Kv>
+          {g?.steps ? <Kv k="Steps">{n0(g.steps)}</Kv> : null}
+          {a.km ? <Kv k="Distance">{n2(a.km)} km</Kv> : null}
+          {ms.elevationGainMillimeters ? <Kv k="Elevation gain">{n0(ms.elevationGainMillimeters / 1000)} m</Kv> : null}</div>}
       </div></section>
       {s?.route ? <section><div className="card"><h3>Route</h3><Route pts={s.route} /></div></section> : null}
       {splits.length ? <section><h2>Kilometre splits</h2>

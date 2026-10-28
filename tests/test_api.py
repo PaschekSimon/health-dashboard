@@ -63,3 +63,13 @@ def test_run_detail_has_zone_minutes(api_data):
     counted = sum(run[k] or 0 for k in ("min_light", "min_moderate", "min_vigorous", "min_peak"))
     assert sum(z["minutes"] or 0 for z in zones) == pytest.approx(counted, abs=0.05)
     assert runs["running"]["runs"] == len(runs["runs"])
+
+
+def test_non_run_workouts_have_zone_minutes(api_data):
+    fr, to = api_data.start.isoformat(), api_data.today.isoformat()
+    with TestClient(cam.appmod.app) as client:
+        rows = client.get("/runs", params={"from": fr, "to": to, "all_types": True}).json()["runs"]
+        other = next(r for r in rows if r["type"] != "RUNNING")
+        detail = client.get(f"/runs/{other['id']}").json()
+    assert sum(z["minutes"] or 0 for z in detail["hr_zones"]["zones"]) > 0
+    assert other["pct_below_vigorous"] is None  # the easy share stays a running figure
