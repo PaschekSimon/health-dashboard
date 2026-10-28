@@ -1,7 +1,7 @@
 """Sync and recompute jobs, recorded in the `sync_runs` table of health.db.
 
 A sync job runs, in order:
-  mcp_cache       google-health-mcp sync  (daily values, sleep, workouts in the MCP's cache)
+  mcp_cache       health_dashboard mcp-sync  (google-health-mcp sync: daily values, sleep, workouts in the MCP's cache)
   health_sync     health_dashboard sync   (intraday samples into health.db)
   daily_check, run_report, weekly_summary, run_scores   (derived tables)
 each as its own process of this environment's Python (the google-health-mcp
@@ -56,10 +56,9 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 );
 """
 
-# step name -> arguments of `python -m health_dashboard`; mcp_cache runs the
-# google-health-mcp command installed next to this Python.
+# step name -> arguments of `python -m health_dashboard`
 STEP_ARGS = {
-    "mcp_cache": None,
+    "mcp_cache": ["mcp-sync"],
     "health_sync": ["sync"],
     "daily_check": ["daily-check"],
     "run_report": ["run-report"],
@@ -72,8 +71,6 @@ SYNC_REASONS = ("open", "button", "mcp")
 
 
 def step_command(name):
-    if STEP_ARGS[name] is None:
-        return [procs.tool("google-health-mcp"), "sync"]
     return procs.module_cmd("health_dashboard", *STEP_ARGS[name])
 
 

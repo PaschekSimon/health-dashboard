@@ -4,6 +4,7 @@
     health open [--no-browser]           start the API hidden if needed, open the app
     health mcp                           the "health-app" MCP server (stdio)
     health sync [--since D] [--types T]  intraday samples from Google into health.db
+    health mcp-sync                      google-health-mcp sync, its requests fetched in parallel
     health sync-on-access                background sync unless one ran in the last 3 h
     health takeout-import [FOLDER]       load a Google Health Takeout export
     health takeout-auto                  monthly Takeout helper (scheduled task)
@@ -25,6 +26,7 @@ COMMANDS = {  # command -> module with main(argv)
     "open": "launcher",
     "mcp": "mcp_server",
     "sync": "sync.health_sync",
+    "mcp-sync": "sync.mcp_sync",
     "sync-on-access": "sync.on_access",
     "takeout-import": "sync.takeout_import",
     "takeout-auto": "sync.takeout_auto",
