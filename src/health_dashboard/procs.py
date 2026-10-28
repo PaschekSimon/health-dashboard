@@ -30,12 +30,6 @@ def module_cmd(module, *args, background=False):
     return [python(background), "-P", "-m", module, *map(str, args)]
 
 
-def tool(name):
-    """A console script installed next to this Python (e.g. google-health-mcp)."""
-    exe = Path(sys.executable).with_name(name + (".exe" if WINDOWS else ""))
-    return str(exe)
-
-
 def hidden():
     """Popen/run kwargs for a child that shows no window."""
     return {"creationflags": subprocess.CREATE_NO_WINDOW} if WINDOWS else {}

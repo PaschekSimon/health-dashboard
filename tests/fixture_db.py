@@ -1,5 +1,5 @@
 """Synthetic test data: a made-up watch history written as data/health.db and
-the google-health-mcp cache, shaped like the real ones but with no personal
+the daily cache (google_health.db), shaped like the real ones but with no personal
 data in it.
 
     fx = make_fixture(tmp_path, days=42, seed=1)
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 """
 
-# The google-health-mcp cache tables the scores read (columns as in its db.py, v1.8.0).
+# The daily cache tables the scores read (columns as in google/cache.py).
 MCP_SCHEMA = """
 CREATE TABLE heart_rate (date TEXT PRIMARY KEY, resting_hr INTEGER, zones TEXT, provider TEXT,
     calculation_method TEXT, data_source TEXT);

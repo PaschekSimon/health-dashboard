@@ -1,14 +1,13 @@
-"""Sync intraday Google Health data into data/health.db, beside the MCP's own cache.
+"""Sync intraday Google Health data into data/health.db, beside the daily cache.
 
-The google-health MCP keeps daily values and whole workouts. This script adds
+The daily sync (`health daily-sync`) keeps daily values and whole workouts in
+the cache. This script adds
 the time series it drops: heart rate every few seconds, steps, distance, active
 energy, activity level, active minutes, heart-rate zone and zone minutes per
 minute, HRV and SpO2 samples, sedentary periods, altitude gain, swim lengths,
 VO2 max estimates, breathing rate per sleep stage, and daily heart-rate zone
-limits and calories per zone. It reuses the
-MCP's login and paging (`list_google_data_points`; the google-health-mcp
-package is a dependency of this one, and its login lives in
-~/.config/google-health-mcp):
+limits and calories per zone. It uses the same login and paging
+(health_dashboard.google; the login lives in ~/.config/google-health-mcp):
 
     python -m health_dashboard sync
     ... sync --since 2026-01-01     # backfill from a date
@@ -18,44 +17,30 @@ Each run resumes from the last synced day per type, re-reading the last two
 days because the watch uploads late. Requests go out in parallel, gzipped and
 spaced to stay inside Google's per-user quota; rows are still written a type
 and a window at a time, in order. Nothing before the first watch day is
-read, and each run deletes the phone's step days before it from the MCP's
-cache (`google-health-mcp sync --since` would bring them back). Rows are keyed by time and source, so
+read, and each run deletes the phone's step days before it from the daily
+cache (`health daily-sync --since` would bring them back). Rows are keyed by time and source, so
 re-reading never duplicates. Times are stored as UTC epoch seconds, with the
 local UTC offset in seconds beside them for grouping by local day.
 """
 
 import argparse
-import gzip
-import io
 import sqlite3
 import sys
-import threading
 import time
-import urllib.request
-import urllib.response
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
-from google_health_mcp.api import (
-    GOOGLE_TYPES,
-    HealthRateLimitError,
-    daily_roll_up,
-    list_google_data_points,
-)
-from google_health_mcp.api import _interval as _interval_type
-from google_health_mcp.api import _sample as _sample_type
-
 from ..config import get_paths
+from ..google import transport
+from ..google.api import HealthRateLimitError, daily_roll_up, list_google_data_points
+from ..google.transport import GoogleTransport  # noqa: F401  (re-exported for tests)
 from ..settings import load_settings
 
 OVERLAP_DAYS = 2
-# Google allows an unverified app 2.5 requests a second per user, so request
-# starts are spaced this far apart however many run at once.
-MIN_REQUEST_GAP = 0.4
 WORKERS = 6
 # Seconds to wait before re-reading a window Google answered with 429.
 RATE_LIMIT_WAITS = (5, 15, 30)
-# MCP cache tables the phone fills on its own (steps, distance, calories)
+# Cache tables the phone fills on its own (steps, distance, calories)
 PHONE_TABLES = ("activity",)
 
 SCHEMA = """
@@ -271,15 +256,6 @@ def rows_calories_in_hr_zone(points):
             yield day, z["heartRateZone"], z["kcal"]
 
 
-# Types the MCP's catalogue lacks; registered here so its pager can list them.
-for _spec in (
-    _interval_type("altitude", "altitude"),
-    _interval_type("swim-lengths-data", "swimLengthsData"),
-    _sample_type("run-vo2-max", "runVo2Max"),
-    _sample_type("respiratory-rate-sleep-summary", "respiratoryRateSleepSummary"),
-):
-    GOOGLE_TYPES.setdefault(_spec.path, _spec)
-
 #: API data type -> (table, row builder, column count, days per request, how to
 #: read it). Heart rate goes a day at a time (tens of thousands of points a day),
 #: most per-minute types a week (a few thousand points, one or two pages),
@@ -310,42 +286,6 @@ TYPES = {
     "calories-in-heart-rate-zone":
         ("daily_calories_in_hr_zone", rows_calories_in_hr_zone, 3, 14, "rollup"),
 }
-
-
-class GoogleTransport(urllib.request.BaseHandler):
-    """Every HTTPS request this process sends: asks for gzip (a page of heart
-    rate is about 3 MB of JSON and 50 kB gzipped) and starts at most one
-    request per `gap` seconds across all threads. Installed as urllib's opener,
-    so the MCP's client, which calls urlopen, goes through it unchanged."""
-
-    handler_order = 400  # before urllib's own: our User-Agent stays, error bodies arrive unzipped
-
-    def __init__(self, gap: float = MIN_REQUEST_GAP):
-        self.gap = gap
-        self._lock = threading.Lock()
-        self._next = 0.0
-
-    def https_request(self, req):
-        with self._lock:
-            now = time.monotonic()
-            start = max(now, self._next)
-            self._next = start + self.gap
-        if start > now:
-            time.sleep(start - now)
-        req.add_header("Accept-Encoding", "gzip")
-        req.add_header("User-Agent", "health-dashboard (gzip)")  # Google wants "gzip" in it too
-        return req
-
-    def https_response(self, req, resp):
-        if resp.headers.get("Content-Encoding") != "gzip":
-            return resp
-        try:
-            body = gzip.decompress(resp.read())
-        finally:
-            resp.close()
-        unzipped = urllib.response.addinfourl(io.BytesIO(body), resp.headers, resp.url, resp.code)
-        unzipped.msg = resp.msg
-        return unzipped
 
 
 def windows(since: date, today: date, days: int):
@@ -424,7 +364,7 @@ def sync_types(conn, types, since: date | None, today: date, first_day: date,
 
 
 def prune_before_watch(mcp_db, first_day: date) -> int:
-    """Delete the phone-only days before `first_day` from the MCP's cache."""
+    """Delete the phone-only days before `first_day` from the daily cache."""
     if not mcp_db.exists():
         return 0
     conn = sqlite3.connect(mcp_db, timeout=30)
@@ -450,7 +390,7 @@ def main(argv=None) -> int:
 
     paths = get_paths()
     first_day = load_settings(paths).watch_start
-    urllib.request.install_opener(urllib.request.build_opener(GoogleTransport()))
+    transport.install()
     conn = sqlite3.connect(paths.health_db)
     conn.executescript(SCHEMA)
     failed = False
@@ -463,9 +403,9 @@ def main(argv=None) -> int:
     conn.close()
     try:
         if n := prune_before_watch(paths.mcp_db, first_day):
-            print(f"pruned {n} phone-only days before {first_day} from the MCP cache")
+            print(f"pruned {n} phone-only days before {first_day} from the daily cache")
     except sqlite3.Error as e:
-        print(f"pruning the MCP cache FAILED: {e}", file=sys.stderr)
+        print(f"pruning the daily cache FAILED: {e}", file=sys.stderr)
     return 1 if failed else 0
 
 

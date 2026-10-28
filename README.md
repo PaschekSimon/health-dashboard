@@ -23,8 +23,8 @@ How the scores are built: [docs/scores.md](docs/scores.md).
 ## How it works
 
 ```
-Google Health API ──> google-health-mcp ──> MCP cache (daily values, sleep, workouts)
-                  └─> health sync ──> data/health.db (2 s heart rate, HRV, per-minute steps ...)
+Google Health API ──> health daily-sync ──> daily cache (daily values, sleep, workouts)
+                  └─> health sync ──────> data/health.db (2 s heart rate, HRV, per-minute steps ...)
                                           │
           health scores, daily-check, ... ┘ writes scores into data/health.db
                                           │
@@ -34,9 +34,10 @@ Google Health API ──> google-health-mcp ──> MCP cache (daily values, sle
 Everything is one Python package, `health_dashboard` (in `src/`), installed
 with [uv](https://docs.astral.sh/uv/) into one environment:
 
-- [google-health-mcp](https://github.com/partymola/google-health-mcp) (a fork
-  of it, as a pinned dependency) does the Google login and keeps a cache of
-  daily values, sleep sessions and workouts.
+- `google/` does the Google login and keeps a cache of daily values, sleep
+  sessions and workouts. It is derived from
+  [google-health-mcp](https://github.com/partymola/google-health-mcp) by
+  jjdelrio (GPL-3.0-or-later), trimmed to what the dashboard uses.
 - `sync/` adds what that cache drops (intraday samples) and imports Google
   Takeout exports for data the API does not offer (Google's own sleep score,
   readiness, stress, running dynamics). `analysis/` and `scores/` compute the
@@ -52,7 +53,7 @@ with [uv](https://docs.astral.sh/uv/) into one environment:
 - Windows or Linux, with [uv](https://docs.astral.sh/uv/) (it fetches Python 3.13 if needed).
 - [Node.js](https://nodejs.org/) LTS to build the web app (`winget install OpenJS.NodeJS.LTS`).
 - A Google account with Google Health data and your own Google Cloud OAuth
-  client (the google-health-mcp README walks you through it).
+  client ([docs/google-setup.md](docs/google-setup.md) walks you through it).
 
 ## Setup
 
@@ -62,8 +63,7 @@ with [uv](https://docs.astral.sh/uv/) into one environment:
    uv sync
    ```
 
-   This creates `.venv` with everything, including google-health-mcp, and the
-   `health` command (`uv run health --help` lists what it can do). Then build
+   This creates `.venv` with everything and the `health` command (`uv run health --help` lists what it can do). Then build
    the web app once (again after each `git pull` that changes `web/`):
 
    ```
@@ -72,16 +72,17 @@ with [uv](https://docs.astral.sh/uv/) into one environment:
    npm run build
    ```
 
-2. **Authorise Google** (its README has the Google Cloud steps):
+2. **Authorise Google** ([docs/google-setup.md](docs/google-setup.md) has the
+   Google Cloud steps):
 
    ```
-   uv run google-health-mcp auth
-   uv run google-health-mcp doctor
-   uv run google-health-mcp sync --days 90
+   uv run health auth
+   uv run health doctor
+   uv run health daily-sync --days 90
    ```
 
-   The login is stored in `~/.config/google-health-mcp`, so every program in
-   the environment uses it.
+   The login is stored in `~/.config/google-health-mcp` (the folder
+   google-health-mcp used, so an existing login keeps working).
 
 3. **Tell it which watch is yours** (optional). Create `data/settings.json`:
 
@@ -130,7 +131,8 @@ Paths come from environment variables, with defaults for a checkout of this repo
 | Variable | Default | What |
 |---|---|---|
 | `HEALTH_DATA_DIR` | `data/` in the repo | `health.db`, settings, score calibration, logs, Takeout, sync lock |
-| `GOOGLE_HEALTH_MCP_DB_PATH` | `~/.local/share/google-health-mcp/google_health.db` | the MCP cache (google-health-mcp reads the same variable) |
+| `GOOGLE_HEALTH_MCP_DB_PATH` | `~/.local/share/google-health-mcp/google_health.db` | the daily cache (where google-health-mcp kept it) |
+| `GOOGLE_HEALTH_MCP_CONFIG_DIR` | `~/.config/google-health-mcp` | the Google login (`google_client.json`, `google_tokens.json`) |
 | `HEALTH_FRONTEND_DIR` | `web/dist/` in the repo | the built web app |
 | `HEALTH_ALLOWED_HOSTS` | | extra host names the API answers to (see below) |
 
@@ -163,9 +165,10 @@ another name, add that name to the `HEALTH_ALLOWED_HOSTS` environment variable
 ## Staying up to date
 
 Opening the dashboard starts a sync (skipped if one finished in the last
-15 minutes); the **Sync** button always runs one. A sync updates the MCP cache,
+15 minutes); the **Sync** button always runs one. A sync updates the daily cache,
 pulls new intraday samples and recomputes every score. Only one sync runs at a
-time, guarded by `data/.sync.lock`.
+time, guarded by `data/.sync.lock`. A question to the MCP server starts one in
+the background when the last one is over 3 hours old.
 
 `health sync-on-access` starts a background sync from anything else, for
 example a Claude Code `SessionStart` hook. It skips if one ran in the last 3 hours.
@@ -195,18 +198,20 @@ src/health_dashboard/
   config.py, settings.py  paths (environment) and per-user settings (data/settings.json)
   context.py              what the analyses and scores are passed (paths, watch, exclusions, databases)
   core/                   queries, sync jobs, annotations (shared by the API and the MCP server)
-  sync/                   Google sync, sync-on-access, Takeout import
+  google/                 Google login, API client, daily cache and its sync (from google-health-mcp)
+  sync/                   intraday sync, sync-on-access, Takeout import
   analysis/, scores/      baselines, daily check, run and weekly reports; Strain, Recovery, Sleep, Healthspan
 web/        the dashboard (React + TypeScript, Vite): src/ (views, charts.js, style.css, vendored
             Leaflet and fonts), public/ (manifest, app icons); the build in dist/ is not committed
-docs/       scores.md (how the scores work), api.md (endpoints, MCP tools)
-tests/      pytest suite on synthetic data, golden/scores.json (the expected scores), smoke/ (live checks)
+docs/       scores.md (how the scores work), api.md (endpoints, MCP tools), google-setup.md
+tests/      pytest suite on synthetic data, golden/scores.json (the expected scores), smoke/ (live checks),
+            google_api/ (the Google code's tests, from google-health-mcp)
 data/       your data, created on first sync, never committed
 ```
 
 `data/` holds `health.db`, `settings.json`, the score calibration
-(`scores_config.json`), logs, the Takeout copy and the sync state. The MCP
-cache and the Google tokens live in google-health-mcp's own folders
+(`scores_config.json`), logs, the Takeout copy and the sync state. The daily
+cache and the Google tokens stay in the folders google-health-mcp used
 (`~/.local/share/google-health-mcp`, `~/.config/google-health-mcp`). The
 `.gitignore` keeps data, logs, tokens and OAuth client files out of git.
 
@@ -244,6 +249,8 @@ against a copy of your real data, without a running server.
 
 ## License
 
-GPL-3.0-or-later, see [LICENSE](LICENSE). The scripts import
-[google-health-mcp](https://github.com/partymola/google-health-mcp), which is
-GPL-3.0-or-later too.
+GPL-3.0-or-later, see [LICENSE](LICENSE). `src/health_dashboard/google/` and
+`tests/google_api/` are derived from
+[google-health-mcp](https://github.com/partymola/google-health-mcp) 1.8.0 by
+jjdelrio, GPL-3.0-or-later, and modified in October 2026; each copied file
+says what changed.

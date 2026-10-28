@@ -8,9 +8,10 @@ override them:
 
     HEALTH_DATA_DIR             health.db, logs, settings.json, scores_config.json,
                                 Takeout files and the sync lock
-    GOOGLE_HEALTH_MCP_DB_PATH   the google-health MCP's cache (same variable the
-                                MCP itself reads); default
-                                ~/.local/share/google-health-mcp/google_health.db
+    GOOGLE_HEALTH_MCP_DB_PATH   the daily cache (daily values, sleep, workouts);
+                                default ~/.local/share/google-health-mcp/google_health.db,
+                                where google-health-mcp kept it
+    GOOGLE_HEALTH_MCP_CONFIG_DIR   the Google login, see google/config.py
     HEALTH_FRONTEND_DIR         the built web app served at /app/
 """
 

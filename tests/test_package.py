@@ -38,7 +38,7 @@ def test_job_steps_run_in_this_environment():
     for name in jobs.SYNC_STEPS + jobs.DERIVED_STEPS:
         cmd = jobs.step_command(name)
         assert cmd[:4] == [sys.executable, "-P", "-m", "health_dashboard"]
-    assert jobs.step_command("mcp_cache")[4:] == ["mcp-sync"]
+    assert jobs.step_command("mcp_cache")[4:] == ["daily-sync"]
     if not procs.WINDOWS:
         assert procs.hidden() == {} and procs.detached() == {"start_new_session": True}
 

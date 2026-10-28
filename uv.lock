@@ -227,15 +227,6 @@ wheels = [
 ]
 
 [[package]]
-name = "google-health-mcp"
-version = "1.8.0"
-source = { git = "https://github.com/PaschekSimon/google-health-mcp?branch=simon#b815917193a1d64a600d5cafc4b8034e123433eb" }
-dependencies = [
-    { name = "anyio" },
-    { name = "mcp" },
-]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -250,7 +241,6 @@ version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "google-health-mcp" },
     { name = "mcp" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -265,7 +255,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "google-health-mcp", git = "https://github.com/PaschekSimon/google-health-mcp?branch=simon" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=2.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },

@@ -1,8 +1,8 @@
 """Start the intraday sync in the background when the health data is opened.
 
-Called from the Claude Code SessionStart hook (.claude/settings.json) and the
-google-health MCP's daily auto-sync, so health.db catches up whenever you
-look at your data instead of on a schedule. Returns at once: the sync runs in
+Called from the Claude Code SessionStart hook (.claude/settings.json), so
+health.db catches up whenever you look at your data instead of on a schedule
+(the health-app MCP starts a full sync job itself when the data is stale). Returns at once: the sync runs in
 a detached process, is skipped if one finished in the last few hours, and a
 lock keeps two from running together. Output goes to data/logs/sync.log.
 
