@@ -6,8 +6,15 @@ lets Claude record context (illness, alcohol, travel, ...) as annotations.
     health mcp              (= python -m health_dashboard.mcp_server)
 
 Data paths come from the environment (config.get_paths).
+
+Logs go to stderr only (Claude Desktop keeps them in mcp-server-health-app.log);
+stdout carries the protocol, so nothing here may print to it.
 """
 
+import faulthandler
+import logging
+import os
+import sys
 import time
 
 try:  # mcp 2.x renamed FastMCP to MCPServer; same decorator API
@@ -15,10 +22,12 @@ try:  # mcp 2.x renamed FastMCP to MCPServer; same decorator API
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
+from .config import get_paths
 from .core import annotations as ann
 from .core import jobs, queries
 
 mcp = FastMCP("health-app")
+log = logging.getLogger("health-app")
 
 
 def _recompute_if(changed):
@@ -33,7 +42,10 @@ def get_day(date: str) -> dict:
     easy_pct: share of run time at or below the top of Z2), the daily-check warning
     (AMBER/RED) and the annotations (illness, alcohol, ...) touching that day."""
     with queries.Db() as db:
-        return queries.dashboard(db, date)
+        try:
+            return queries.dashboard(db, date)
+        except ValueError as e:  # bad date: tell the model why
+            return {"error": str(e)}
 
 
 @mcp.tool()
@@ -44,7 +56,10 @@ def get_trend(metric: str, date_from: str, date_to: str) -> dict:
     sleep_performance, asleep_min, sleep_min, strain, steps, google_hrv_rmssd,
     nrem_hr, breathing, skin_temp, spo2, vo2max, weight, trimp, google_readiness."""
     with queries.Db() as db:
-        return queries.trend(db, metric, date_from, date_to)
+        try:
+            return queries.trend(db, metric, date_from, date_to)
+        except ValueError as e:  # bad date or metric: tell the model why
+            return {"error": str(e)}
 
 
 @mcp.tool()
@@ -55,7 +70,10 @@ def list_runs(date_from: str, date_to: str) -> dict:
     `running` summary (runs, km, minutes, TRIMP, easy_pct). Use the `id` with
     get_run."""
     with queries.Db() as db:
-        return queries.runs(db, date_from, date_to)
+        try:
+            return queries.runs(db, date_from, date_to)
+        except ValueError as e:  # bad date: tell the model why
+            return {"error": str(e)}
 
 
 @mcp.tool()
@@ -185,11 +203,22 @@ def _wait(run, seconds):
 
 
 def main(argv=None):
-    conn = ann.connect()
-    ann.ensure_schema(conn)
-    conn.close()
-    jobs.connect().close()
-    mcp.run()
+    # Plain timestamped lines on stderr; a failing tool call is already caught by
+    # the SDK, returned to the model as an error and logged here with its traceback.
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, force=True,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    faulthandler.enable(sys.stderr)  # hard crashes (e.g. in sqlite) still leave a trace
+    log.info("starting (pid %s, data %s)", os.getpid(), get_paths().data)
+    try:
+        conn = ann.connect()
+        ann.ensure_schema(conn)
+        conn.close()
+        jobs.connect().close()
+        mcp.run()
+    except BaseException:
+        log.exception("stopped with an error")
+        raise
+    log.info("stopped")
 
 
 if __name__ == "__main__":
