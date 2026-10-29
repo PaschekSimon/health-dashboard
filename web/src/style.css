@@ -432,9 +432,12 @@ main.enter { animation: view-in .38s var(--spring) both; }
   .form input[name=note] { width: 100%; }
   .form label:has(input[name=note]) { flex: 1 1 100%; }
 }
-/* phone date fields: the native field is wider than its date, which pushes the picker arrow far right */
+/* phone date fields: Android's native field is far wider than its date and paints its arrow at the right
+   edge, so size it to the date. Desktop Chrome's calendar icon (seen in device emulation) would not fit
+   beside it, so it becomes an invisible layer over the whole field: a tap anywhere opens the picker. */
 @media (max-width: 767px) and (pointer: coarse) {
-  input[type=date] { width: calc(10ch + 40px); }
+  input[type=date] { position: relative; width: calc(8ch + 38px); }
+  input[type=date]::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
 }
 @media (max-width: 480px) {
   .head > .seg { width: 100%; }
