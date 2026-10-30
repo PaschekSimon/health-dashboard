@@ -105,8 +105,8 @@ class TestFragmentedNights:
         assert row["start_time"] == "2026-03-15T23:10:00Z"
         assert row["end_time"] == "2026-03-16T06:40:00Z"
 
-    def test_a_nap_counts_as_a_session_of_its_night(self, tmp_db, sync_sleep):
-        """Every session sharing a date is one night's row, naps included."""
+    def test_a_nap_is_left_out_of_its_night(self, tmp_db, sync_sleep):
+        """A nap ends on the same date as the night before it, but is not part of it."""
         sync_sleep(
             [
                 _session(asleep="400"),
@@ -121,8 +121,22 @@ class TestFragmentedNights:
             ]
         )
         row = gq.query_sleep(tmp_db, "2026-03-01", "2026-04-01")[0]
-        assert row["total_minutes"] == 430
-        assert row["sessions"] == 2
+        assert row["total_minutes"] == 400
+        assert row["end_time"] == "2026-03-16T06:40:00Z"
+        assert row["sessions"] == 1
+
+    def test_an_unflagged_afternoon_session_is_a_nap(self, tmp_db, sync_sleep):
+        """Google sets mainSleep on the night and nothing on a nap."""
+        nap = _session(start="2026-03-16T12:57:00Z", end="2026-03-16T16:17:00Z", asleep="189")
+        del nap["sleep"]["metadata"]["mainSleep"]
+        sync_sleep([_session(asleep="400"), nap])
+        assert gq.query_sleep(tmp_db, "2026-03-01", "2026-04-01")[0]["total_minutes"] == 400
+
+    def test_an_unflagged_piece_at_night_stays_in_its_night(self, tmp_db, sync_sleep):
+        piece = _session(start="2026-03-16T02:00:00Z", end="2026-03-16T06:40:00Z", asleep="250")
+        del piece["sleep"]["metadata"]["mainSleep"]
+        sync_sleep([_session(end="2026-03-16T01:30:00Z", asleep="120"), piece])
+        assert gq.query_sleep(tmp_db, "2026-03-01", "2026-04-01")[0]["total_minutes"] == 370
 
     def test_one_session_is_not_flagged_as_split(self, tmp_db, sync_sleep):
         sync_sleep([_session()])

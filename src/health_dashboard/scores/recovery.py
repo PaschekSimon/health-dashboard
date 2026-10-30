@@ -25,7 +25,7 @@ import argparse
 import bisect
 import math
 import statistics
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from itertools import product
 
 from ..analysis import baseline as bl
@@ -59,8 +59,7 @@ def asleep_minutes(s):
 
 
 def is_nap(s):
-    hour = datetime.fromtimestamp(s["start"] + s["offset"], tz=timezone.utc).hour
-    return 10 <= hour < 20
+    return s["nap"]
 
 
 def asleep_set(sessions):

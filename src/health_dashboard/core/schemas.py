@@ -152,7 +152,7 @@ class RecoveryRange(Model):
 # --------------------------------------------------------------- sleep ----
 
 class SleepSummary(Model):
-    """Google's sleep summary for a night (MCP cache `sleep`)."""
+    """Google's sleep summary for a night (MCP cache `sleep`): the main sleep, naps left out."""
     date: str
     total_minutes: Num | None = None
     efficiency: Num | None = None
@@ -182,6 +182,15 @@ class SleepPerformance(Model):
     need_strain_slope: float | None = None
 
 
+class Nap(Model):
+    """A sleep session apart from the night (naps.is_nap), dated by the local day it started."""
+    date: str
+    start_time: str
+    end_time: str
+    asleep_min: Num | None = None
+    in_bed_min: Num
+
+
 class SleepNight(WithAnnotationIds):
     night: str = Field(description="wake date")
     google: SleepSummary | None = None
@@ -192,6 +201,7 @@ class SleepRange(Model):
     from_: str = Field(alias="from")
     to: str
     nights: list[SleepNight]
+    naps: list[Nap] = Field(default_factory=list)
     annotations: list[Annotation]
 
 
@@ -374,6 +384,7 @@ class DashboardSleep(Model):
     night: str
     google: SleepSummary | None = None
     performance: SleepPerformance | None = None
+    naps: list[Nap] = Field(default_factory=list, description="naps taken on this day")
 
 
 class DashboardStrain(Model):
@@ -603,6 +614,7 @@ class DayDetail(Model):
     steps_by_hour: list[HourSteps]
     sedentary_periods: list[Segment]
     sleep: DaySleep | None = None
+    naps: list[Nap] = Field(default_factory=list)
     workouts: list[DayWorkout]
     annotations: list[Annotation]
 

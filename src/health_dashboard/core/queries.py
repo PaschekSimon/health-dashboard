@@ -12,6 +12,7 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 from ..config import get_paths
+from ..naps import is_nap, local_start
 from ..settings import load_settings
 from . import annotations as ann
 from . import jobs, zones
@@ -201,13 +202,34 @@ def _sleep_row(db, night):
     return s, _round(p, 1)
 
 
+def _iso(t):
+    return datetime.fromisoformat(t.replace("Z", "+00:00"))
+
+
+def naps(db, date_from, date_to):
+    """Naps (naps.is_nap) started on a local day in [date_from, date_to]. A nap
+    ends on the day it starts, so the session's own date bounds the query."""
+    out = []
+    for (rec,) in db.m.execute("SELECT record FROM sleep_sessions WHERE date BETWEEN ? AND ? ORDER BY start_time",
+                               (date_from, date_to)):
+        s = json.loads(rec).get("sleep") or {}
+        started = local_start(s)
+        if not is_nap(s) or started is None or not date_from <= started.date().isoformat() <= date_to:
+            continue
+        i = s["interval"]
+        out.append({"date": started.date().isoformat(), "start_time": i["startTime"], "end_time": i["endTime"],
+                    "asleep_min": _num((s.get("summary") or {}).get("minutesAsleep")),
+                    "in_bed_min": round((_iso(i["endTime"]) - _iso(i["startTime"])).total_seconds() / 60)})
+    return out
+
+
 def hypnogram(db, night):
     """The night's main sleep as stage segments (UTC ISO times), plus the
     brief wake-ups Google lists apart from the stages. Naps are left out."""
     best = None
     for (rec,) in db.m.execute("SELECT record FROM sleep_sessions WHERE date = ?", (night,)):
         s = json.loads(rec).get("sleep") or {}
-        if s.get("metadata", {}).get("nap") or not s.get("stages"):
+        if is_nap(s) or not s.get("stages"):
             continue
         mins = int(s.get("summary", {}).get("minutesInSleepPeriod") or 0)
         if best is None or mins > best[0]:
@@ -232,7 +254,7 @@ def sleep(db, date_from=None, date_to=None):
     for n in sorted(set(google) | set(perf)):
         nights.append({"night": n, "google": google.get(n), "performance": _round(perf.get(n), 1),
                        "annotation_ids": by.get(n, [])})
-    return {"from": fr, "to": to, "nights": nights, "annotations": anns}
+    return {"from": fr, "to": to, "nights": nights, "naps": naps(db, fr, to), "annotations": anns}
 
 
 # ---------------------------------------------------------------- runs ----
@@ -326,7 +348,7 @@ def dashboard(db, day=None):
     return {
         "date": ds,
         "recovery": _round(rec),
-        "sleep": {"night": ds, "google": sleep_g, "performance": sleep_p},
+        "sleep": {"night": ds, "google": sleep_g, "performance": sleep_p, "naps": naps(db, ds, ds)},
         "strain": {"today": _round(strain), "target": strain_target(band)},
         "steps": watch_steps["n"] if watch_steps and watch_steps["n"] is not None else (act or {}).get("steps"),
         "google_daily_activity": act,
@@ -351,6 +373,7 @@ METRICS = {
     "sleep_performance": ("h", "score_sleep_daily", "date", "sleep_performance"),
     "asleep_min": ("h", "score_sleep_daily", "date", "asleep_min"),
     "sleep_min": ("m", "sleep", "date", "total_minutes"),
+    "nap_min": None,  # computed in nap_minutes_by_day
     "strain": ("h", "score_strain_daily", "date", "strain"),
     "steps": ("m", "activity", "date", "steps"),
     "google_hrv_rmssd": ("m", "hrv", "date", "daily_rmssd"),
@@ -380,15 +403,29 @@ METRICS = {
 }
 
 
+def nap_minutes_by_day(db, date_from, date_to):
+    """Minutes asleep in naps per day, 0 on a day without one. Days are those
+    with a recorded night, so a day the watch was off is missing, not 0."""
+    days = [r["date"] for r in _all(db.m, "SELECT date FROM sleep WHERE date BETWEEN ? AND ? ORDER BY date",
+                                    (date_from, date_to))]
+    mins = {}
+    for n in naps(db, date_from, date_to):
+        mins[n["date"]] = mins.get(n["date"], 0) + (n["asleep_min"] or 0)
+    return {d: mins.get(d, 0) for d in sorted(set(days) | set(mins))}
+
+
 def trend(db, metric, date_from=None, date_to=None):
     if metric not in METRICS:
         raise ValueError(f"metric must be one of {', '.join(METRICS)}")
-    src, table, dcol, vcol = METRICS[metric]
     fr, to = _range(date_from, date_to)
     fr = _from_watch(db, fr)
-    pts = [{"date": r["d"], "value": round(r["v"], 3) if isinstance(r["v"], float) else r["v"]}
-           for r in _all(getattr(db, src), f"SELECT {dcol} d, {vcol} v FROM {table} WHERE {dcol} BETWEEN ? AND ? "
-                                           f"AND {vcol} IS NOT NULL ORDER BY {dcol}", (fr, to))]
+    if metric == "nap_min":
+        pts = [{"date": d, "value": v} for d, v in nap_minutes_by_day(db, fr, to).items()]
+    else:
+        src, table, dcol, vcol = METRICS[metric]
+        pts = [{"date": r["d"], "value": round(r["v"], 3) if isinstance(r["v"], float) else r["v"]}
+               for r in _all(getattr(db, src), f"SELECT {dcol} d, {vcol} v FROM {table} WHERE {dcol} BETWEEN ? AND ? "
+                                               f"AND {vcol} IS NOT NULL ORDER BY {dcol}", (fr, to))]
     vals = [p["value"] for p in pts]
     anns, by = _annotations_by_date(db, fr, to)
     for p in pts:

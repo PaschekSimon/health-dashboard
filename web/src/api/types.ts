@@ -20,6 +20,7 @@ export type TrendPoint = S["TrendPoint"];
 
 export type SleepResponse = S["SleepRange"];
 export type Night = S["SleepNight"];
+export type Nap = S["Nap"];
 
 export type ExplainRecovery = S["RecoveryExplanation"];
 export type ExplainSleep = S["SleepExplanation"];

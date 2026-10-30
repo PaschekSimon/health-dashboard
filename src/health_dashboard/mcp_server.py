@@ -75,7 +75,8 @@ def get_trend(metric: str, date_from: str, date_to: str) -> dict:
     """Daily values of one metric between two dates (YYYY-MM-DD, inclusive),
     with n/mean/min/max and the annotations in that range (each point lists the
     ids of annotations touching it). Metrics: recovery, hrv_ms, rhr,
-    sleep_performance, asleep_min, sleep_min, strain, steps, google_hrv_rmssd,
+    sleep_performance, asleep_min, sleep_min (night only), nap_min (minutes napped
+    per day), strain, steps, google_hrv_rmssd,
     nrem_hr, breathing, skin_temp, spo2, vo2max, weight, trimp, google_readiness."""
     _sync_if_stale()
     with queries.Db() as db:

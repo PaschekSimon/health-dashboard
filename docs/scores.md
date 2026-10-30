@@ -70,6 +70,21 @@ or two signals are more than 1.5 away, and RED when AMBER holds two nights runni
 
 No validated formula for sleep need exists anywhere, so treat the need as an estimate.
 
+**Naps.** A night is its main sleep only. A nap is a session Google does not
+mark as main sleep that starts between 10:00 and 20:00 local time
+(`naps.is_nap`). It belongs to the day it was taken, not to the night before it
+(which ends on the same date), and it lowers the next night's need minute for
+minute: a nap discharges sleep pressure the next night then does not need to
+(Vienne 2012, doi:10.5665/sleep.1992; Centofanti 2015,
+doi:10.1016/j.aap.2015.11.009), and split sleep with the same 24-hour total
+performs like one block (Cousins 2019, doi:10.1093/sleep/zsz018). Efficiency,
+Calm, stages and Recovery stay night-only, since HRV and heart rate in a
+daytime nap are not comparable with the night (Boudreau 2013,
+doi:10.5665/sleep.3230). Naps get their own trend (`nap_min`): long habitual
+naps go along with higher cardiovascular risk in cohort studies (Yamada 2015,
+doi:10.5665/sleep.5246), which is an association, so it informs and is not
+scored.
+
 ## Healthspan age and Pace of Aging
 
 Each metric's all-cause mortality hazard ratio against a guideline value

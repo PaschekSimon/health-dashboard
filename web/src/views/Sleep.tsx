@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, type ReactNode } from "react";
 import { get, prefetch } from "../api/client";
-import type { ExplainSleep, Night as NightRow, SleepResponse, TrendResponse } from "../api/types";
+import type { ExplainSleep, Nap, Night as NightRow, SleepResponse, TrendResponse } from "../api/types";
 import { Kv, Paged, RangeSeg } from "../components/bits";
 import { Chart, ChartBox, Hypnogram, Legend } from "../components/Chart";
 import { Hint } from "../components/Hint";
@@ -28,6 +28,7 @@ export async function loadSleep(args: string[], _q: URLSearchParams, ui: Ui) {
 }
 
 const asleepOf = (r: NightRow) => r.performance?.asleep_min ?? r.google?.total_minutes;
+const napLine = (n: Nap) => `<div><span>Nap ${fClock(n.start_time)}–${fClock(n.end_time)}</span><b>${fHM(n.asleep_min)}</b></div>`;
 
 function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; gs: TrendResponse }) {
   const nights = sl.nights;
@@ -38,6 +39,10 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
   const cfg = useMemo(() => {
     const map = byKey(nights, "night");
     const xs = xDates(fr, to, nights, "night");
+    // naps by the day they were taken, which is also the column of the night ending that morning
+    const naps: Record<string, Nap[]> = {};
+    sl.naps.forEach(n => { (naps[n.date] = naps[n.date] || []).push(n); });
+    const napTip = (i: number) => (naps[xs[i]] || []).map(napLine).join("");
     const sh = shades(sl.annotations);
     const gmap: Record<string, number[]> = {};
     gs.points.forEach(p => { (gmap[p.date] = gmap[p.date] || []).push(p.value); });
@@ -57,10 +62,17 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
           { name: "Sufficiency", type: "line" as const, color: "var(--ink-3)", noDots: true, data: pick(xs, map, r => r.performance?.sufficiency), fmt: pct }] },
       stages: { ...base, height: 170, y: { min: 0, fmt: (v: number) => v + "h" },
         series: STAGES.map(([n, k, c]) => ({ name: n, type: "bar" as const, stack: "s", color: c, data: st(k), fmt: (v: number | null) => fHM(v != null ? v * 60 : null) })) },
-      times: { ...base, height: 170, y: { min: 0, max: 18, invert: true, ticks: [0, 3, 6, 9, 12, 15, 18], fmt: fClockY },
+      times: { ...base, height: 170, y: { min: 0, max: 24, invert: true, ticks: [0, 6, 12, 18, 24], fmt: fClockY }, tipExtra: napTip,
         series: [{ name: "In bed", type: "range" as const, color: "var(--ink)", lo: pick(xs, map, r => clockY(r.google?.start_time)),
           hi: pick(xs, map, r => { const a = clockY(r.google?.start_time), b = clockY(r.google?.end_time); return b != null && a != null && b < a ? b + 24 : b; }),
-          tip: (i: number) => { const g = map[xs[i]]?.google; return g ? `${fClock(g.start_time)} – ${fClock(g.end_time)}` : "–"; } }] },
+          tip: (i: number) => { const g = map[xs[i]]?.google; return g ? `${fClock(g.start_time)} – ${fClock(g.end_time)}` : "–"; } },
+          // a day's naps as one light bar, first start to last end
+          { name: "Nap", type: "range" as const, color: "var(--ink-3)", noTip: true,
+            lo: xs.map(d => naps[d] ? Math.min(...naps[d].map(n => clockY(n.start_time)!)) : null),
+            hi: xs.map(d => naps[d] ? Math.max(...naps[d].map(n => clockY(n.end_time)!)) : null) }] },
+      naps: { ...base, height: 140, y: { min: 0, fmt: (v: number) => v + "m" }, tipExtra: napTip,
+        series: [{ name: "Napped", type: "bar" as const, color: "var(--ink-2)", noTip: true,
+          data: xs.map(d => naps[d] ? naps[d].reduce((t, n) => t + (n.asleep_min || 0), 0) : map[d] ? 0 : null) }] },
       gscore: { x: gx, height: 140, y: { fmt: (v: number) => Math.round(v) }, xfmt: fShort, tipx: fDay,
         series: [{ name: "Score", type: "line" as const, data: gx.map(d => gmap[d] ? Math.max(...gmap[d]) : null), fmt: (v: number | null) => v == null ? "–" : String(Math.round(v)) }] },
     };
@@ -80,7 +92,7 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
       </div></section>
       <section><div className="grid g2">
         <ChartBox id="c-gscore" title={<Hint k="google_sleep">Google sleep score</Hint>} now="" sub="from the latest Takeout export" cfg={cfg.gscore} />
-        <div />
+        <ChartBox id="c-naps" title={<Hint k="naps">Naps</Hint>} now={sl.naps.length ? `${sl.naps.length} in this range` : "none in this range"} cfg={cfg.naps} />
       </div></section>
       <section><h2>Nights</h2><p className="note">Click a night, or a day on the charts, for its detail.</p>
         <Paged head={<tr><th>Night (wake date)</th><th className="num"><Hint k="sleep_perf">Performance</Hint></th><th>Bed</th><th>Wake</th><th className="num">Asleep</th>

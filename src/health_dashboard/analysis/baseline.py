@@ -25,6 +25,7 @@ import statistics
 from datetime import date, datetime, timedelta, timezone
 
 from ..context import Context
+from ..naps import is_nap
 
 BASELINE_MAX_NIGHTS = 42   # use up to this many eligible nights ...
 BASELINE_MIN_NIGHTS = 28   # ... a baseline with fewer is marked provisional
@@ -56,7 +57,8 @@ def local_date(t, offset):
 
 def sleep_sessions(ctx):
     """All watch sleep sessions (main sleep and naps) as dicts with
-    start/end (epoch), offset, wake date, and stages [(start, end, type)]."""
+    start/end (epoch), offset, wake date, stages [(start, end, type)] and
+    whether it is a nap (naps.is_nap)."""
     out = []
     for date_s, record in ctx.mcp.execute("SELECT date, record FROM sleep_sessions ORDER BY start_time"):
         rec = json.loads(record)
@@ -72,14 +74,17 @@ def sleep_sessions(ctx):
             "end": parse_time(s["interval"]["endTime"]),
             "offset": offset,
             "stages": stages,
+            "nap": is_nap(s),
         })
     return out
 
 
 def main_sleep_by_night(ctx):
-    """Longest sleep session per wake date."""
+    """Longest sleep session per wake date, naps left out."""
     best = {}
     for s in sleep_sessions(ctx):
+        if s["nap"]:
+            continue
         cur = best.get(s["night"])
         if cur is None or s["end"] - s["start"] > cur["end"] - cur["start"]:
             best[s["night"]] = s

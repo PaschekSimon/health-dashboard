@@ -29,6 +29,8 @@ export const INFO: Record<string, [string, string?]> = {
     "85 %+ optimal, 70–84 % sufficient, under 70 % poor."],
   need: ["Sleep need for this night: your personal baseline, plus extra after a high-strain day, plus part of the sleep debt from the last three nights, minus naps.",
     "Sleeping close to it keeps Sleep Performance high; a long run of short nights builds debt that raises it."],
+  naps: ["Daytime sleep apart from the night: a session Google doesn't mark as your main sleep that starts between 10:00 and 20:00. A nap is not part of any night; it lowers the next night's sleep need by the time you slept.",
+    "Short naps are fine. Regular naps of 30–60 minutes or more go along with higher cardiovascular risk in large cohort studies (an association, mostly in older people), so a rising trend is worth noticing."],
   sufficiency: ["Hours asleep as a share of your sleep need, capped at 100 %. 60 % of Sleep Performance.",
     "100 % means you slept at least what you needed."],
   consistency: ["How regular your sleep is: the chance of being asleep or awake at the same clock time as on the previous days, 0–100.",

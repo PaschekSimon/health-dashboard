@@ -16,6 +16,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
+from ..naps import is_nap
 from . import api, auth, config
 from . import cache as db
 
@@ -443,11 +444,12 @@ def _local_date(timestamp: str | None, offset: str | None) -> str | None:
 def sync_sleep(conn, start, end) -> int:
     """One row a night, aggregating every session that night was recorded as.
 
-    A fragmented night - a wake-and-resume, or a main sleep plus a nap -
-    arrives as several sessions sharing an end date. The table is keyed by
-    date, so without aggregation the last session written replaces the night
-    with its shortest piece. Summing them is also what an imported row holds,
-    which keeps a series comparable across the two.
+    A fragmented night - a wake-and-resume - arrives as several sessions
+    sharing an end date. The table is keyed by date, so without aggregation the
+    last session written replaces the night with its shortest piece. Naps are
+    left out: an afternoon nap ends on the same date as the night before it,
+    and summing it in would stretch that night to e.g. 02:00-17:00. Naps stay
+    in sleep_sessions.
 
     `efficiency` is never written: nothing Google reports corresponds to it,
     and a lookalike computed here would sit in a column beside values that
@@ -460,7 +462,7 @@ def sync_sleep(conn, start, end) -> int:
             continue
         interval = payload.get("interval") or {}
         night = _local_date(interval.get("endTime"), interval.get("endUtcOffset"))
-        if night is None:
+        if night is None or is_nap(payload):
             continue
         summary = payload.get("summary") or {}
 

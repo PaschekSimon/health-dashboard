@@ -54,6 +54,7 @@ function Dashboard({ d, dash }: { d: string; dash: DashboardResponse }) {
   );
 
   const asleep = sp?.asleep_min ?? sg?.total_minutes;
+  const naps = dash.sleep.naps ?? [];
   const sleepCard = (sp || sg) ? (
     <a className="card score" href="#/sleep">
       <div className="label">Last night · <Hint k="sleep_perf">Sleep Performance</Hint></div>
@@ -65,6 +66,7 @@ function Dashboard({ d, dash }: { d: string; dash: DashboardResponse }) {
           <Kv k="Asleep">{fHM(asleep)}</Kv>
           <Kv k={<Hint k="need">Need</Hint>}>{fHM(sp?.need_min)}</Kv>
           <Kv k="Bed / wake">{sg ? `${fClock(sg.start_time)} – ${fClock(sg.end_time)}` : "–"}</Kv>
+          {naps.map(n => <Kv key={n.start_time} k={<Hint k="naps">Nap</Hint>}>{`${fClock(n.start_time)} – ${fClock(n.end_time)}`}</Kv>)}
         </div>
       </div>
     </a>
