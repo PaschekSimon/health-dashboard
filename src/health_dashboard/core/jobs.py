@@ -35,13 +35,14 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from .. import procs
+from .. import locks, procs
 from ..config import child_env, get_paths
 
 OPEN_MIN_INTERVAL = timedelta(minutes=15)
 STALE_LOCK = 30 * 60          # same as sync_on_access.py
 HEARTBEAT = 60                # seconds between lock touches
 RECOMPUTE_WAIT = 45 * 60      # how long a recompute waits for a running sync
+QUEUED_ALIVE = 2 * 60         # a queued recompute not heard from for this long has died
 STEP_TIMEOUT = 60 * 60
 
 SCHEMA = """
@@ -53,7 +54,8 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     status TEXT NOT NULL,
     error TEXT,
     origin TEXT,
-    steps TEXT
+    steps TEXT,
+    heartbeat TEXT
 );
 """
 
@@ -84,32 +86,20 @@ def connect(paths=None):
     conn = sqlite3.connect(paths.health_db, timeout=30)
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.executescript(SCHEMA)
+    if "heartbeat" not in {r[1] for r in conn.execute("PRAGMA table_info(sync_runs)")}:
+        conn.execute("ALTER TABLE sync_runs ADD COLUMN heartbeat TEXT")  # a queued job's last sign of life
     return conn
 
 
 # ---------------------------------------------------------------- lock ----
 
-def _lock_age(paths):
-    try:
-        return time.time() - paths.sync_lock.stat().st_mtime
-    except FileNotFoundError:
-        return float("inf")
-
-
 def lock_held(paths=None):
-    return _lock_age(paths or get_paths()) < STALE_LOCK
+    return locks.age((paths or get_paths()).sync_lock) < STALE_LOCK
 
 
 def try_lock(paths):
-    """Take .sync.lock the way sync-on-access does. True if we got it."""
-    if lock_held(paths):
-        return False
-    paths.sync_lock.unlink(missing_ok=True)
-    try:
-        os.close(os.open(paths.sync_lock, os.O_CREAT | os.O_EXCL))
-        return True
-    except FileExistsError:
-        return False
+    """Take .sync.lock (locks.take, shared with sync-on-access). True if we got it."""
+    return locks.take(paths.sync_lock, STALE_LOCK)
 
 
 def _heartbeat(paths, stop):
@@ -144,14 +134,14 @@ def recent_runs(conn, limit=10, paths=None):
 
 
 def _expire(conn, paths=None):
-    """A run still marked running/queued while no lock is held died with its process."""
-    if lock_held(paths):
-        return
-    conn.execute("UPDATE sync_runs SET status='interrupted', finished=?, error='process ended without "
-                 "finishing' WHERE status = 'running'", (_now(),))
+    """A run still marked running while no lock is held, or queued while its
+    waiting process has stopped beating, died with its process."""
     conn.execute("UPDATE sync_runs SET status='interrupted', finished=?, error='never got the lock' "
-                 "WHERE status = 'queued' AND started < ?",
-                 (_now(), (datetime.now() - timedelta(seconds=RECOMPUTE_WAIT + 300)).isoformat()))
+                 "WHERE status = 'queued' AND coalesce(heartbeat, started) < ?",
+                 (_now(), (datetime.now() - timedelta(seconds=QUEUED_ALIVE)).isoformat(timespec="seconds")))
+    if not lock_held(paths):
+        conn.execute("UPDATE sync_runs SET status='interrupted', finished=?, error='process ended without "
+                     "finishing' WHERE status = 'running'", (_now(),))
     conn.commit()
 
 
@@ -286,6 +276,8 @@ def run_job(run_id, paths=None):
     if run["reason"] == "recompute":
         deadline = time.time() + RECOMPUTE_WAIT
         while not try_lock(paths):
+            conn.execute("UPDATE sync_runs SET heartbeat=? WHERE id=?", (_now(), run_id))
+            conn.commit()
             if time.time() > deadline:
                 conn.execute("UPDATE sync_runs SET status='failed', finished=?, error=? WHERE id=?",
                              (_now(), "timed out waiting for .sync.lock", run_id))

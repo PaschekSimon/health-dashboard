@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import procs
+from .. import locks, procs
 from ..config import get_paths
 
 DOWNLOADS = Path.home() / "Downloads"
@@ -160,17 +160,7 @@ def new_exports(downloads: Path, state: dict) -> dict[str, list[Path]]:
 
 
 def take_lock(f: Files) -> bool:
-    try:
-        if time.time() - f.lock.stat().st_mtime < STALE_LOCK:
-            return False
-        f.lock.unlink(missing_ok=True)
-    except FileNotFoundError:
-        pass
-    try:
-        os.close(os.open(f.lock, os.O_CREAT | os.O_EXCL))
-        return True
-    except FileExistsError:
-        return False
+    return locks.take(f.lock, STALE_LOCK)
 
 
 def extract(parts: list[Path], dest: Path) -> int:

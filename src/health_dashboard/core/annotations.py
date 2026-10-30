@@ -63,17 +63,17 @@ def connect(db_path=None):
 
 def ensure_schema(conn):
     old = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'annotations'").fetchone()
-    if old and "AUTOINCREMENT" not in old[0]:  # first version reused deleted ids
-        conn.executescript("BEGIN; ALTER TABLE annotations RENAME TO annotations_old;" + SCHEMA +
-                           "INSERT INTO annotations SELECT * FROM annotations_old; DROP TABLE annotations_old; COMMIT;")
-    elif old and "'simon'" in old[0]:  # the source for your own entries used to be 'simon'
+    # The first version reused deleted ids (no AUTOINCREMENT), and the source
+    # for your own entries used to be 'simon'; one rebuild fixes either or both.
+    if old and ("AUTOINCREMENT" not in old[0] or "'simon'" in old[0]):
         conn.executescript(
             "BEGIN; ALTER TABLE annotations RENAME TO annotations_old;" + SCHEMA +
             "INSERT INTO annotations SELECT id, kind, start, \"end\", target, attrs, status, "
             "CASE source WHEN 'simon' THEN 'user' ELSE source END, confidence, raw_text, note, "
             "created_at, updated_at FROM annotations_old; "
-            "UPDATE sqlite_sequence SET seq = max(seq, (SELECT seq FROM sqlite_sequence WHERE name = 'annotations_old')) "
-            "WHERE name = 'annotations'; DROP TABLE annotations_old; COMMIT;")
+            "UPDATE sqlite_sequence SET seq = max(seq, coalesce((SELECT seq FROM sqlite_sequence "
+            "WHERE name = 'annotations_old'), 0)) WHERE name = 'annotations'; "
+            "DROP TABLE annotations_old; COMMIT;")
     conn.executescript(SCHEMA)
     conn.commit()
 

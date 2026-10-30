@@ -52,10 +52,17 @@ app = FastAPI(title="Health backend", version="1.1", lifespan=lifespan)
 #    127.0.0.1 (DNS rebinding) carries its own Host and is turned away.
 #  - Origin: a page on another site can still fire a simple POST at
 #    127.0.0.1 (e.g. /annotations/5/confirm); the browser sends that site as
-#    Origin, so writes from any origin but ours are refused.
+#    Origin, so writes from any origin but ours are refused. Unlike Host, an
+#    IP address here only counts if it's this PC, your LAN or your tailnet: a
+#    page served from a public IP is another site.
 # Extra host names (comma-separated) can be added with HEALTH_ALLOWED_HOSTS.
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+# this PC, the LAN (IPv4 private ranges, link-local, IPv6 unique local) and
+# the tailnet (Tailscale's 100.64.0.0/10; its IPv6 addresses are unique local)
+OWN_NETWORKS = [ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
+    "::1/128", "fc00::/7", "fe80::/10")]
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -79,6 +86,20 @@ def allowed_host(name):
         return False
 
 
+def allowed_origin(origin):
+    """Origin of a page that may write: one on a name allowed_host accepts, or
+    on an IP address of this PC, the LAN or the tailnet."""
+    if not origin or origin == "null":
+        return False
+    name = urlsplit(origin).hostname
+    try:
+        ip = ipaddress.ip_address(name or "")
+    except ValueError:
+        return allowed_host(name)
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    return any(ip in n for n in OWN_NETWORKS)
+
+
 def _hostname(netloc):
     try:
         return urlsplit("//" + netloc).hostname
@@ -92,7 +113,7 @@ async def same_site_only(request, call_next):
         return PlainTextResponse("unknown host", status_code=403)
     origin = request.headers.get("origin")
     if origin and request.method not in SAFE_METHODS:
-        if origin == "null" or not allowed_host(urlsplit(origin).hostname):
+        if not allowed_origin(origin):
             return PlainTextResponse("cross-site request refused", status_code=403)
     return await call_next(request)
 

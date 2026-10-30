@@ -92,16 +92,16 @@ def windows_in(hrv, ts, start, end):
     return hrv[bisect.bisect_left(ts, start):bisect.bisect_left(ts, end)]
 
 
-def strain_slope(ctx, actual_hist, strain_by_day, night):
-    """Extra minutes asleep per Strain point of the previous day, from the 60
-    nights before `night` (OLS), clipped to 0..STRAIN_SLOPE_MAX; 0 with too few nights."""
+def strain_slope(actual_hist, strain_by_day, nights):
+    """Extra minutes asleep per Strain point of the previous day, from `nights`
+    (the eligible nights of the last 60 days, OLS), clipped to
+    0..STRAIN_SLOPE_MAX; 0 with too few nights."""
     xs, ys = [], []
-    for m, mins in actual_hist.items():
-        if night - timedelta(days=60) <= m < night and not ctx.is_excluded(m):
-            st = strain_by_day.get((m - timedelta(days=1)).isoformat())
-            if st is not None:
-                xs.append(st)
-                ys.append(mins)
+    for m in nights:
+        st = strain_by_day.get((m - timedelta(days=1)).isoformat())
+        if st is not None:
+            xs.append(st)
+            ys.append(actual_hist[m])
     if len(xs) < STRAIN_SLOPE_MIN_N or len(set(xs)) < 2:
         return 0.0
     mx, my = statistics.mean(xs), statistics.mean(ys)
@@ -141,7 +141,16 @@ def sleep_scores(ctx, strain_by_day, median_strain, rec_hrv):
         night_stats[n] = {"nrem_mean": statistics.mean(nrem) if len(nrem) > 30 else None,
                           "nrem_sd": statistics.stdev(nrem) if len(nrem) > 30 else None,
                           "wins": wins}
-    eligible_all = [n for n in mains if not ctx.is_excluded(n)]
+    eligible_all = sorted(n for n in mains if not ctx.is_excluded(n))
+    # Calm baselines come from nights that have the data: sleep HR, HRV windows
+    hr_nights = [n for n in eligible_all if night_stats[n]["nrem_mean"]]
+    hrv_nights = [n for n in eligible_all if night_stats[n]["wins"]]
+
+    def calm_baseline(nights, n):
+        """The BASE_NIGHTS nights before n; all of them (the whole history)
+        while fewer than BASE_MIN come before it."""
+        i = bisect.bisect_left(nights, n)
+        return nights[max(0, i - sc.BASE_NIGHTS):i] if i >= sc.BASE_MIN else nights
 
     out, need_hist, actual_hist = {}, {}, {}
     for n in sorted(mains):
@@ -151,7 +160,8 @@ def sleep_scores(ctx, strain_by_day, median_strain, rec_hrv):
         actual_hist[n] = asleep_total
 
         # baseline need: nights followed by above-median HRV, not after a short night
-        window = [m for m in actual_hist if n - timedelta(days=60) <= m < n and not ctx.is_excluded(m)]
+        window = eligible_all[bisect.bisect_left(eligible_all, n - timedelta(days=60)):
+                              bisect.bisect_left(eligible_all, n)]
         hv = [rec_hrv[m] for m in window if rec_hrv.get(m) is not None]
         need_b = 8.2 * 60
         if len(hv) >= 10:
@@ -163,7 +173,7 @@ def sleep_scores(ctx, strain_by_day, median_strain, rec_hrv):
                 need_b = min(max(statistics.mean(good), 7.0 * 60), 9.5 * 60)
         prev_day = n - timedelta(days=1)
         st = strain_by_day.get(prev_day.isoformat())
-        slope = strain_slope(ctx, actual_hist, strain_by_day, n)
+        slope = strain_slope(actual_hist, strain_by_day, window)
         need_strain = min(max(0.0, (st - median_strain) * slope), 45) if st is not None else 0.0
         # shortfall vs that night's need without its own debt term, so debt
         # doesn't compound from night to night
@@ -179,21 +189,25 @@ def sleep_scores(ctx, strain_by_day, median_strain, rec_hrv):
         consistency = sri(asleep_all, local_noon, 5)
         efficiency = 100 * asleep / (asleep + awake) if asleep + awake else None
 
-        # calm: share of asleep minutes in a high-HR or low-HRV state
-        prior = [m for m in sorted(eligible_all, reverse=True) if m < n][:sc.BASE_NIGHTS]
-        if len(prior) < sc.BASE_MIN:
-            prior = eligible_all
-        means = [night_stats[m]["nrem_mean"] for m in prior if night_stats[m]["nrem_mean"]]
-        sds = [night_stats[m]["nrem_sd"] for m in prior if night_stats[m]["nrem_sd"]]
-        thr_hr = statistics.median(means) + 2 * statistics.median(sds)
-        p10 = sc.percentile([r for m in prior for r in night_stats[m]["wins"]], 10)
-        low_hrv = set()
-        for t, r in windows_in(hrv, ts, s["start"], s["end"]):
-            if r < p10:
-                low_hrv.update(range(t // 60, t // 60 + 5))
+        # calm: share of asleep minutes in a high-HR or low-HRV state; a
+        # signal counts if this night has it and there's a baseline for it
         sleep_min = [m for b, e, t in s["stages"] if t != "AWAKE" for m in range(b // 60, e // 60)]
-        stress = sum(1 for m in sleep_min if m in low_hrv or (m in mhr and mhr[m][0] > thr_hr))
-        calm = 100 - 100 * stress / len(sleep_min) if sleep_min else None
+        hr_base = calm_baseline(hr_nights, n)
+        sds = [night_stats[m]["nrem_sd"] for m in hr_base if night_stats[m]["nrem_sd"]]
+        thr_hr = (statistics.median(night_stats[m]["nrem_mean"] for m in hr_base) + 2 * statistics.median(sds)
+                  if sds and any(m in mhr for m in sleep_min) else None)
+        p10 = sc.percentile([r for m in calm_baseline(hrv_nights, n) for r in night_stats[m]["wins"]], 10)
+        low_hrv = set()
+        if p10 is not None:
+            for t, r in windows_in(hrv, ts, s["start"], s["end"]):
+                if r < p10:
+                    low_hrv.update(range(t // 60, t // 60 + 5))
+        if sleep_min and (thr_hr is not None or (p10 is not None and night_stats[n]["wins"])):
+            stress = sum(1 for m in sleep_min
+                         if m in low_hrv or (thr_hr is not None and m in mhr and mhr[m][0] > thr_hr))
+            calm = 100 - 100 * stress / len(sleep_min)
+        else:
+            calm = None  # no HR or HRV for this night, or none to compare with
 
         parts = {"sufficiency": sufficiency, "consistency": consistency,
                  "efficiency": efficiency, "calm": calm}

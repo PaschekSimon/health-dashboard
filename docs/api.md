@@ -82,7 +82,8 @@ same numbers.
 - `reason=open` is skipped if the last successful full sync (a `sync_runs` row) finished < 15 min ago
   (sync-on-access's `.last_sync` doesn't count: it only runs `health sync`);
   `reason=button` always runs.
-- Every run is a row in `sync_runs` (id, reason, started, finished, status, error, origin, steps).
+- Every run is a row in `sync_runs` (id, reason, started, finished, status, error, origin, steps,
+  heartbeat: when a queued recompute last checked for the lock; one silent for 2 min is marked interrupted).
 - Jobs run in a detached process, so they finish even if the server stops.
 - `health sync` already resumes per type from `sync_state` and re-reads the last
   2 days (upserts keyed by time + source), so nothing was added there.

@@ -456,7 +456,7 @@ def browse(db, source, table, date_from=None, date_to=None, limit=200, offset=0,
             where.append(f"substr({dc}, 1, 10) BETWEEN ? AND ?")
             args += [fr, to]
     sql = f"SELECT * FROM '{table}'" + (" WHERE " + " AND ".join(where) if where else "")
-    total = _one(conn, sql.replace("SELECT *", "SELECT count(*) n", 1), args)["n"]
+    total = (_one(conn, sql.replace("SELECT *", "SELECT count(*) n", 1), args) or {"n": 0})["n"]
     if dc:
         sql += f" ORDER BY {dc} {'DESC' if desc else 'ASC'}"
     limit = max(1, min(int(limit), 2000))

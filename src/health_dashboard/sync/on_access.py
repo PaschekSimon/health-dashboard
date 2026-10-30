@@ -10,34 +10,20 @@ lock keeps two from running together. Output goes to data/logs/sync.log.
 """
 
 import argparse
-import os
 import subprocess
 import time
-from pathlib import Path
 
-from .. import procs
+from .. import locks, procs
 from ..config import get_paths
 
 MIN_INTERVAL = 3 * 3600  # seconds since the last finished sync
 STALE_LOCK = 30 * 60  # a lock older than this is from a crashed run
 
 
-def _age(path: Path) -> float:
-    try:
-        return time.time() - path.stat().st_mtime
-    except FileNotFoundError:
-        return float("inf")
-
-
 def start(paths) -> None:
-    if _age(paths.last_sync) < MIN_INTERVAL:
+    if locks.age(paths.last_sync) < MIN_INTERVAL:
         return
-    if _age(paths.sync_lock) < STALE_LOCK:
-        return
-    paths.sync_lock.unlink(missing_ok=True)
-    try:
-        os.close(os.open(paths.sync_lock, os.O_CREAT | os.O_EXCL))
-    except FileExistsError:
+    if not locks.take(paths.sync_lock, STALE_LOCK):
         return
     procs.spawn(procs.module_cmd("health_dashboard", "sync-on-access", "--run", background=True))
 

@@ -137,3 +137,25 @@ def test_healthspan_history_is_backfilled(fixture_data, tmp_path):
     assert sorted(hist) == [(first + timedelta(i)).isoformat() for i in range(n + 1)]
     assert hist[day.isoformat()] == pytest.approx(res["all"]["age"])
     assert len(set(round(v, 6) for v in hist.values())) > 1
+
+
+def test_calm_survives_nights_without_hr_or_hrv(fixture_data, tmp_path):
+    """Weeks without the watch's HR and HRV (left on the charger) leave the
+    next nights without a Calm baseline: those nights get no Calm, and
+    scoring goes on."""
+    import shutil
+    from dataclasses import replace
+    for p in (fixture_data.health_db, fixture_data.mcp_db):
+        shutil.copy(p, tmp_path / p.name)
+    fx = replace(fixture_data, dir=tmp_path, health_db=tmp_path / fixture_data.health_db.name,
+                 mcp_db=tmp_path / fixture_data.mcp_db.name)
+    gap_end = fx.start + timedelta(days=25)
+    with sqlite3.connect(fx.health_db) as conn:
+        conn.execute("DELETE FROM hr_samples WHERE t < ?", (midnight(gap_end),))
+        conn.execute("DELETE FROM hrv_samples WHERE t < ?", (midnight(gap_end),))
+    sleep = by_date(run_scores(fx), "score_sleep_daily")
+    assert len(sleep) == len(fx.nights)
+    in_gap = [d for d in sleep if d < gap_end - timedelta(days=1)]
+    after = [d for d in sleep if d > gap_end]
+    assert in_gap and all(sleep[d]["calm"] is None for d in in_gap)  # no data, no Calm (not a calm 100)
+    assert after and all(sleep[d]["calm"] is not None for d in after)  # baselined on the nights with data
