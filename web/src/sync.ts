@@ -58,7 +58,7 @@ async function loadStatus() {
   try { status = await fetchJson<Status>("/status"); } catch { paint({ cls: "err", text: "API not reachable" }); return null; }
   const own = (status.recent_runs || []).find(r => r.status === "running" || r.status === "queued");
   if (!following) {
-    if (status.sync_running) own ? fetchJson<SyncRun>(`/sync/${own.id}`).then(followRun) : waitForOther();
+    if (status.sync_running) own ? fetchJson<SyncRun>(`/sync/${own.id}`).then(followRun, paintIdle) : waitForOther();
     else paintIdle();
   }
   return status;
@@ -71,7 +71,9 @@ export async function startSync(reason: "open" | "button") {
   catch (e) { following = false; paint({ cls: "err", text: "Sync failed to start", title: (e as Error).message, disabled: false }); }
 }
 
-// Poll one sync/recompute job until it ends, then refresh the view.
+// Poll one sync/recompute job until it ends, then refresh the view. Never
+// rejects: if the API stops answering, it says so and the minute-by-minute
+// status check picks the job up again.
 export async function followRun(run: SyncRun): Promise<void> {
   if (run.status === "skipped") { await loadStatus(); return; }
   if (run.status === "busy") return waitForOther();
@@ -85,6 +87,9 @@ export async function followRun(run: SyncRun): Promise<void> {
       await sleep(2500);
       run = await fetchJson<SyncRun>(`/sync/${run.id}`);
     }
+  } catch (e) {
+    paint({ cls: "err", text: "Lost track of the sync", title: (e as Error).message, disabled: false });
+    return;
   } finally { following = false; }
   await loadStatus();
   if (run.status !== "ok") {

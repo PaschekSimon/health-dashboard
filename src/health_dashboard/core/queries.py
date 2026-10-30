@@ -28,6 +28,12 @@ STRAIN_TARGET = {"green": (14.0, 18.0, "hard training possible"),
 
 
 def _ro(path):
+    """Read-only connection; an empty one while the file isn't there yet (no
+    sync has written the daily cache), so reads answer with no data."""
+    if not path.exists():
+        conn = sqlite3.connect("file::memory:?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
     conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
@@ -44,13 +50,19 @@ class Db:
         settings = load_settings(self.paths)
         self.watch = settings.watch
         self.watch_start = settings.watch_start.isoformat()
-        self.h = _ro(self.paths.health_db)
-        self.m = _ro(self.paths.mcp_db)
-        self.a = ann.connect(self.paths.health_db)
+        self.h = self.m = self.a = None
+        try:
+            self.h = _ro(self.paths.health_db)
+            self.m = _ro(self.paths.mcp_db)
+            self.a = ann.connect(self.paths.health_db)
+        except BaseException:
+            self.close()
+            raise
 
     def close(self):
         for c in (self.h, self.m, self.a):
-            c.close()
+            if c is not None:
+                c.close()
 
     def __enter__(self):
         return self
@@ -210,9 +222,9 @@ def naps(db, date_from, date_to):
     """Naps (naps.is_nap) started on a local day in [date_from, date_to]. A nap
     ends on the day it starts, so the session's own date bounds the query."""
     out = []
-    for (rec,) in db.m.execute("SELECT record FROM sleep_sessions WHERE date BETWEEN ? AND ? ORDER BY start_time",
-                               (date_from, date_to)):
-        s = json.loads(rec).get("sleep") or {}
+    for r in _all(db.m, "SELECT record FROM sleep_sessions WHERE date BETWEEN ? AND ? ORDER BY start_time",
+                  (date_from, date_to)):
+        s = json.loads(r["record"]).get("sleep") or {}
         started = local_start(s)
         if not is_nap(s) or started is None or not date_from <= started.date().isoformat() <= date_to:
             continue
@@ -227,8 +239,8 @@ def hypnogram(db, night):
     """The night's main sleep as stage segments (UTC ISO times), plus the
     brief wake-ups Google lists apart from the stages. Naps are left out."""
     best = None
-    for (rec,) in db.m.execute("SELECT record FROM sleep_sessions WHERE date = ?", (night,)):
-        s = json.loads(rec).get("sleep") or {}
+    for r in _all(db.m, "SELECT record FROM sleep_sessions WHERE date = ?", (night,)):
+        s = json.loads(r["record"]).get("sleep") or {}
         if is_nap(s) or not s.get("stages"):
             continue
         mins = int(s.get("summary", {}).get("minutesInSleepPeriod") or 0)
