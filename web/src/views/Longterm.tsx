@@ -17,10 +17,10 @@ import { rangeDates, useUi, type Ui } from "../ui";
 const HS: Record<string, string> = { vo2max: "VO2 max", rhr: "Resting HR", steps: "Steps", moderate: "Moderate activity", vigorous: "Vigorous activity",
   strength: "Strength training", sleep_h: "Sleep", sri: "Sleep regularity" };
 const MONTHLY: [string, string, (v: number) => string][] = [["recovery", "Recovery %", n0], ["hrv_ms", "HRV ms", n1], ["rhr", "Resting HR", n1],
-  ["sleep_h", "Sleep h", n1], ["sleep_performance", "Sleep Performance", n0], ["strain", "Strain", n1], ["steps", "Steps / day", n0],
+  ["sleep_h", "Sleep h", n1], ["nap_min", "Naps min / day", n0], ["sleep_performance", "Sleep Performance", n0], ["strain", "Strain", n1], ["steps", "Steps / day", n0],
   ["vo2max", "VO2 max", n1], ["weight", "Weight kg", n1]];
 const HS_HINT: Record<string, string> = { vo2max: "vo2max", rhr: "rhr", moderate: "active_min", vigorous: "active_min", sri: "sri" };
-const MONTHLY_HINT: Record<string, string> = { recovery: "recovery", hrv_ms: "hrv", rhr: "rhr", sleep_performance: "sleep_perf", strain: "strain", vo2max: "vo2max" };
+const MONTHLY_HINT: Record<string, string> = { nap_min: "naps", recovery: "recovery", hrv_ms: "hrv", rhr: "rhr", sleep_performance: "sleep_perf", strain: "strain", vo2max: "vo2max" };
 const VN: Record<string, string> = { all: "All days", excl_illness: "Without illness", last30: "Last 30 days", last30_excl_illness: "Last 30, without illness" };
 const lower = (s: string | null | undefined) => (s || "").replace(/_/g, " ").toLowerCase();
 

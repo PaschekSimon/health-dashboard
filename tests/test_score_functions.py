@@ -113,8 +113,7 @@ def test_asleep_minutes_and_naps():
     s = {"start": 0, "end": 3600, "offset": 3600, "stages": [(0, 600, "AWAKE"), (600, 3600, "LIGHT")]}
     assert recovery.asleep_minutes(s) == (50, 10)
     assert recovery.asleep_minutes(dict(s, stages=[])) == (60, 0)
-    assert not recovery.is_nap(s)                                  # 01:00 local
-    assert recovery.is_nap(dict(s, start=13 * 3600))               # 14:00 local
+    assert recovery.is_nap(dict(s, nap=True)) and not recovery.is_nap(dict(s, nap=False))  # naps.is_nap
 
 
 # ----------------------------------------------------------- healthspan ---

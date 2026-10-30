@@ -15,7 +15,7 @@ from datetime import UTC, datetime, time, timedelta
 
 from . import annotations as ann
 from . import zones
-from .queries import _all, _annotations_by_date, _d, _from_watch, _one, _range, _round, short_id
+from .queries import _all, _annotations_by_date, _d, _from_watch, _one, _range, _round, nap_minutes_by_day, naps, short_id
 
 LOCAL_DAY = "date({c} + coalesce(utc_offset, 0), 'unixepoch')"
 EPOCH_COLS = ("t", "t_start", "t_end", "sleep_start", "sleep_end")
@@ -115,7 +115,7 @@ def day_detail(db, day):
                 for w in _all(db.h, "SELECT log_id, type, name, minutes, km, avg_hr FROM analysis_workouts "
                                     "WHERE date = ? ORDER BY end_local_h", (ds,))]
     return {"date": ds, "hr_5min": hr, "steps_by_hour": [{"hour": h, "steps": n} for h, n in hours.items()],
-            "sedentary_periods": sedentary, "sleep": sleep, "workouts": workouts,
+            "sedentary_periods": sedentary, "sleep": sleep, "naps": naps(db, ds, ds), "workouts": workouts,
             "annotations": [a for a in ann.list_(db.a, ds, ds) if a["status"] != "rejected"]}
 
 
@@ -345,6 +345,10 @@ def longterm(db):
             if d and d >= db.watch_start and v is not None:
                 acc.setdefault(d[:7], []).append(v)
         monthly[metric] = [{"month": m, "mean": round(sum(v) / len(v), 2), "n": len(v)} for m, v in sorted(acc.items())]
+    acc = {}
+    for d, v in nap_minutes_by_day(db, db.watch_start, datetime.now().date().isoformat()).items():
+        acc.setdefault(d[:7], []).append(v)
+    monthly["nap_min"] = [{"month": m, "mean": round(sum(v) / len(v), 2), "n": len(v)} for m, v in sorted(acc.items())]
     vo2 = [_round(r, 2) for r in _all(db.m, "SELECT date, vo2_max, cardio_fitness_level FROM cardio_fitness "
                                             "ORDER BY date")]
     run_vo2 = [{"date": _utc(r["t"] + (r["utc_offset"] or 0)).date().isoformat(),

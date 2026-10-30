@@ -64,6 +64,10 @@ function Activity({ fr, to, day, ac, dd }: { fr: string; to: string; day: string
       const from = iso(a) < day ? 0 : a.getHours() * 60 + a.getMinutes();
       sleepSh.push({ from, to: b.getHours() * 60 + b.getMinutes(), label: "sleep" });
     }
+    for (const n of dd.naps ?? []) {
+      const a = new Date(n.start_time), b = new Date(n.end_time);
+      sleepSh.push({ from: a.getHours() * 60 + a.getMinutes(), to: b.getHours() * 60 + b.getMinutes(), label: "nap" });
+    }
     return {
       hr: { x: dd.hr_5min.map(p => mins(p.t)), numeric: true, xmin: 0, xmax: 1440, xticks: niceTicksBy(0, 1440, 120), gap: 20, height: 260, shades: sleepSh,
         xfmt: (v: number) => pad2(Math.floor(v / 60)) + ":" + pad2(v % 60), series: [
@@ -94,7 +98,7 @@ function Activity({ fr, to, day, ac, dd }: { fr: string; to: string; day: string
             <input type="date" id="day" value={day} max={today()} onChange={e => e.target.value && go(e.target.value)} />
             <button className="btn small" id="next" disabled={day >= today()} onClick={() => go(addDays(day, 1))}>›</button>
           </div>
-          <span className="note">{n0(dsum)} steps{dd.sleep ? ` · slept ${fClock(dd.sleep.start_time)}–${fClock(dd.sleep.end_time)}` : ""}
+          <span className="note">{n0(dsum)} steps{dd.sleep ? ` · slept ${fClock(dd.sleep.start_time)}–${fClock(dd.sleep.end_time)}` : ""}{(dd.naps ?? []).map(n => ` · nap ${fClock(n.start_time)}–${fClock(n.end_time)}`).join("")}
             {dd.workouts.length ? <> · {dd.workouts.map((w, i) => <span key={w.id}>{i ? ", " : ""}<a href={`#/training/w/${w.id}`}>{w.name}</a></span>)}</> : null}</span>
         </div>
         <div className="grid">

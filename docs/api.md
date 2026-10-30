@@ -25,13 +25,13 @@ answer includes the annotations touching it (`annotations`, and `annotation_ids`
 | GET | `/status` | last successful sync, newest data per table, health_sync watermarks, sync running?, last 5 runs |
 | GET | `/dashboard?date=` | Recovery %, last night's sleep + Sleep Performance, Strain + target, steps, this week's running (with `easy_pct`), daily-check warning |
 | GET | `/recovery?from=&to=` | daily Recovery with z-scores and the daily-check flag (default: last 30 days) |
-| GET | `/sleep?from=&to=` | Google's sleep summary + Sleep Performance per night |
+| GET | `/sleep?from=&to=` | Google's sleep summary (main sleep only) + Sleep Performance per night, and the naps in the range |
 | GET | `/runs?from=&to=` | runs from `analysis_workouts` (+ Strain) and a `running` summary (runs, km, minutes, TRIMP, `easy_pct`); `&all_types=true` for every workout |
 | GET | `/runs/{id}` | one workout: analysis, Google summary, km splits, minutes per HR zone Z1–Z5 (`hr_zones`) (id = short numeric id or full log_id) |
 | GET | `/trend/{metric}?from=&to=` | one metric over time (recovery, hrv_ms, rhr, sleep_performance, strain, steps, ...) |
 | GET | `/explain/{recovery\|sleep\|strain}?date=` | score broken into components |
 | GET | `/activity?from=&to=` | per day: steps (watch), Google steps, distance, floors, calories, AZM, active minutes, sitting time |
-| GET | `/day/{date}` | one day intraday: HR (5-min), steps per hour, sedentary periods, sleep, workouts |
+| GET | `/day/{date}` | one day intraday: HR (5-min), steps per hour, sedentary periods, sleep, naps, workouts |
 | GET | `/training?from=&to=` | daily Strain, weekly load (fitness/fatigue/form), Google ACWR, personal records |
 | GET | `/workout-series/{id}` | one workout: HR (10 s), running dynamics, GPS route shape |
 | GET | `/longterm` | Healthspan (all variants), monthly averages, VO2 max, weight, ECG list, assessments, all annotations |

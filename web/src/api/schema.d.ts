@@ -654,6 +654,11 @@ export interface components {
             night: string;
             google: components["schemas"]["SleepSummary"] | null;
             performance: components["schemas"]["SleepPerformance"] | null;
+            /**
+             * Naps
+             * @description naps taken on this day
+             */
+            naps: components["schemas"]["Nap"][];
         };
         /** DashboardStrain */
         DashboardStrain: {
@@ -672,6 +677,8 @@ export interface components {
             /** Sedentary Periods */
             sedentary_periods: components["schemas"]["Segment"][];
             sleep: components["schemas"]["DaySleep"] | null;
+            /** Naps */
+            naps: components["schemas"]["Nap"][];
             /** Workouts */
             workouts: components["schemas"]["DayWorkout"][];
             /** Annotations */
@@ -969,6 +976,22 @@ export interface components {
             name: string;
             /** Label */
             label: string;
+        };
+        /**
+         * Nap
+         * @description A sleep session apart from the night (naps.is_nap), dated by the local day it started.
+         */
+        Nap: {
+            /** Date */
+            date: string;
+            /** Start Time */
+            start_time: string;
+            /** End Time */
+            end_time: string;
+            /** Asleep Min */
+            asleep_min: number | null;
+            /** In Bed Min */
+            in_bed_min: number;
         };
         /** NewestData */
         NewestData: {
@@ -1420,12 +1443,14 @@ export interface components {
             to: string;
             /** Nights */
             nights: components["schemas"]["SleepNight"][];
+            /** Naps */
+            naps: components["schemas"]["Nap"][];
             /** Annotations */
             annotations: components["schemas"]["Annotation"][];
         };
         /**
          * SleepSummary
-         * @description Google's sleep summary for a night (MCP cache `sleep`).
+         * @description Google's sleep summary for a night (MCP cache `sleep`): the main sleep, naps left out.
          */
         SleepSummary: {
             /** Date */
