@@ -32,6 +32,7 @@ const napLine = (n: Nap) => `<div><span>Nap ${fClock(n.start_time)}–${fClock(n
 
 function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; gs: TrendResponse }) {
   const nights = sl.nights;
+  const napList = sl.naps ?? [];   // absent from a backend older than the nap change
   const last = nights[nights.length - 1];
   const cons = nights.map(r => r.performance?.consistency).filter((v): v is number => v != null);
   const show = (d: string) => { location.hash = `#/sleep/${d}`; };
@@ -41,7 +42,7 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
     const xs = xDates(fr, to, nights, "night");
     // naps by the day they were taken, which is also the column of the night ending that morning
     const naps: Record<string, Nap[]> = {};
-    sl.naps.forEach(n => { (naps[n.date] = naps[n.date] || []).push(n); });
+    napList.forEach(n => { (naps[n.date] = naps[n.date] || []).push(n); });
     const napTip = (i: number) => (naps[xs[i]] || []).map(napLine).join("");
     const sh = shades(sl.annotations);
     const gmap: Record<string, number[]> = {};
@@ -92,7 +93,7 @@ function Sleep({ fr, to, sl, gs }: { fr: string; to: string; sl: SleepResponse; 
       </div></section>
       <section><div className="grid g2">
         <ChartBox id="c-gscore" title={<Hint k="google_sleep">Google sleep score</Hint>} now="" sub="from the latest Takeout export" cfg={cfg.gscore} />
-        <ChartBox id="c-naps" title={<Hint k="naps">Naps</Hint>} now={sl.naps.length ? `${sl.naps.length} in this range` : "none in this range"} cfg={cfg.naps} />
+        <ChartBox id="c-naps" title={<Hint k="naps">Naps</Hint>} now={napList.length ? `${napList.length} in this range` : "none in this range"} cfg={cfg.naps} />
       </div></section>
       <section><h2>Nights</h2><p className="note">Click a night, or a day on the charts, for its detail.</p>
         <Paged head={<tr><th>Night (wake date)</th><th className="num"><Hint k="sleep_perf">Performance</Hint></th><th>Bed</th><th>Wake</th><th className="num">Asleep</th>
