@@ -148,7 +148,7 @@ function Night({ d, sl, e }: { d: string; sl: SleepResponse; e: Ex }) {
   return (
     <>
       <div className="head"><a href="#/sleep" className="note">‹ Sleep</a></div>
-      <div className="head"><h1>{fDay(d)}</h1><span className="sub">{g.start_time ? `${fClock(g.start_time)}–${fClock(g.end_time)} · ` : ""}night ending on this day</span>
+      <div className="head"><h1>{fDay(d)}</h1><span className="sub">{g.start_time ? `${fClock(g.start_time)}–${fClock(g.end_time)}` : ""}</span>
         <div className="datenav">
           <button className="btn small" id="prev" aria-label="Previous night" disabled={!prev} onClick={() => go(prev)}>‹</button>
           <button className="btn small" id="next" aria-label="Next night" disabled={!next} onClick={() => go(next)}>›</button>
