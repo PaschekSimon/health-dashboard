@@ -10,7 +10,8 @@ Sleep Performance = 0.60 Sufficiency + 0.15 Consistency + 0.15 Efficiency + 0.10
          + 0.5 / 0.25 / 0.125 x shortfall of the previous three nights
          - naps of the previous day
 Recovery: HRV = Google's night-average RMSSD (hrv.daily_rmssd; deep-sleep windows only
-  as fallback): wearable sleep staging is ~60-75 % accurate (Dial 2025), and the
+  as fallback): wearable sleep staging agrees only moderately with polysomnography
+  (WHOOP ~60 % stage agreement, Miller 2022, doi:10.3390/s22166317), and the
   night average was steadier and tracked RHR and illness better.
   C = w_hrv z_HRV + w_rhr z_RHR + w_sleep z_sleep + w_resp z_resp against a
   robust 30-night baseline without illness/alcohol nights, -0.5 if skin temp
