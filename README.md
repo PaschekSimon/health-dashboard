@@ -249,6 +249,12 @@ against a copy of your real data, without a running server.
 - The scores are modelled on WHOOP's published descriptions, not WHOOP's
   algorithms. Use them as a personal trend, not a medical measurement.
 
+## How this was built
+
+Most of the code was written by AI (Claude Code) under my direction. I defined
+the features, made the design and architecture decisions, tested and reviewed
+the changes.
+
 ## License
 
 GPL-3.0-or-later, see [LICENSE](LICENSE). `src/health_dashboard/google/` and
