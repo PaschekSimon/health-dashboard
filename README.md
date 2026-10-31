@@ -1,7 +1,9 @@
 # Health dashboard
 
-A local web dashboard for your Google Health data (Pixel Watch / Fitbit),
-with WHOOP-style scores computed from your own heart-rate, HRV and sleep data.
+A local web dashboard for your Google Health data (Pixel Watch / Fitbit), with WHOOP-style scores computed from your own data.
+
+![Dashboard tab](docs/dashboard.png)
+
 Everything runs on your own machine (Windows or Linux): the data stays in a
 SQLite file, the API listens on `127.0.0.1` only, and nothing is uploaded anywhere.
 
