@@ -188,7 +188,7 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
         {run ? <div className="card"><div className="label">Distance</div><div className="big">{a.km ? n2(a.km) : "–"}<small>{a.km ? " km" : ""}</small></div></div> : null}
         <div className="card"><div className="label">Time</div><div className="big">{fDur(a.minutes != null ? a.minutes * 60 : null)}</div></div>
         {run ? <div className="card"><div className="label">Pace</div><div className="big">{fPace(pace)}<small>{pace ? " /km" : ""}</small></div></div> : null}
-        <div className="card"><div className="label">Avg HR</div><div className="big">{n0(a.avg_hr)}<small> bpm</small></div><div className="note">max {n0(a.max_hr)}</div></div>
+        <div className="card"><div className="label">Avg HR</div><div className="big">{n0(a.avg_hr)}<small> bpm</small></div></div>
         <div className="card"><div className="label"><Hint k="strain">Strain</Hint></div><div className="big">{n1(w.strain)}</div><div className="note"><Hint k="trimp">TRIMP</Hint> {n0(a.trimp)}</div></div>
       </div>
       <section><div className="card runcharts" ref={box}>
@@ -208,7 +208,8 @@ function Workout({ w, s }: { w: RunDetail; s: WorkoutSeries | null }) {
       <section><div className={run ? "grid g3" : "grid g2"}>
         <div className="card"><h3><Hint k="zones">Heart rate zones</Hint></h3>
           {w.hr_zones.zones.map(z => { const bpm = zoneBpm(z);
-            return <Kv key={z.zone} k={<>{z.zone}{bpm ? <> <span className="note">{bpm} bpm</span></> : null}</>}>{z.minutes != null ? `${n1(z.minutes)} min · ${pct(z.pct)}` : "–"}</Kv>; })}</div>
+            return <Kv key={z.zone} k={<>{z.zone}{bpm ? <> <span className="note">{bpm} bpm</span></> : null}</>}>{z.minutes != null ? `${n1(z.minutes)} min · ${pct(z.pct)}` : "–"}</Kv>; })}
+          {a.max_hr != null ? <Kv k="Max HR">{n0(a.max_hr)} bpm</Kv> : null}</div>
         {run ? <><div className="card"><h3>Efficiency</h3>
           <Kv k={<Hint k="drift">Aerobic decoupling</Hint>}>{a.decoupling_pct != null ? sgn(a.decoupling_pct, 1) + "%" : "–"}</Kv>
           <Kv k={<Hint k="ef">Efficiency factor</Hint>}>{n2(a.ef)}</Kv>
