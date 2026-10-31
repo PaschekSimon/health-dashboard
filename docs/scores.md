@@ -142,3 +142,158 @@ sleep-debt chain lets one changed day move later days, so the numbers are
 exactly those of a full recompute (`tests/test_score_cache.py` checks this).
 `health scores --full` rebuilds the cache from scratch; it also rebuilds by
 itself when the watch in `settings.json` changes or a trigger is missing.
+
+## Sources
+
+Every paper below is indexed in PubMed and its DOI was checked there; the
+WHOOP pages are WHOOP's own published descriptions. Some choices have no
+published formula behind them and are this project's own calibration: the
+Recovery weights (0.50 / 0.25 / 0.15 / 0.10), the strength load of 0.5 per
+minute, the Sleep Performance weights, the 0.5 / 0.25 / 0.125 sleep-debt
+repayment and the early-warning thresholds. They were set to follow WHOOP's
+descriptions and were checked against Google's own scores (Strain r = 0.91
+with cardio load, Recovery r = 0.68 with Readiness, Sleep r = 0.75 with the
+sleep score).
+
+### WHOOP's published descriptions
+
+- WHOOP. How does WHOOP Strain work? (0 to 21 scale and the Strain bands).
+  <https://www.whoop.com/thelocker/how-does-whoop-strain-work-101/>
+- WHOOP. More personalized heart rate zones with WHOOP (heart-rate reserve).
+  <https://www.whoop.com/thelocker/more-personalized-heart-rate-zones-with-whoop>
+- WHOOP. How does WHOOP Recovery work? (inputs and the red / yellow / green bands).
+  <https://www.whoop.com/au/en/thelocker/how-does-whoop-recovery-work-101/>
+- WHOOP. How much sleep do I need? (sleep need from baseline, Strain, sleep debt and naps).
+  <https://www.whoop.com/thelocker/how-much-sleep-do-i-need/>
+- WHOOP. Sleep consistency: why we track it.
+  <https://www.whoop.com/thelocker/new-feature-sleep-consistency-why-we-track-it/>
+- Gadgets & Wearables (2025). WHOOP's new Sleep Performance score (the four parts).
+  <https://gadgetsandwearables.com/2025/05/05/whoop-new-sleep-score-metric/>
+- WHOOP (2017). The Advantage of Continuous Physiological Monitoring (white paper on Strain, Recovery and Sleep).
+  <https://discover.whoop.com//wp-content/uploads/2018/04/The-Advantage-of-Continuous-Physiological-Monitoring.pdf>
+- WHOOP (2025). Advancing Personalized Longevity Insights with Wearable Data (Healthspan white paper, `years = 10 × ln(HR)`).
+  <https://assets.ctfassets.net/rbzqg6pelgqa/3ONehqJslbqxI7CQlwGjfT/36429d6f66940e1fd866a772ed5bfc93/WHOOP_2025_White_Paper_Healthspan__6_.pdf>
+- WHOOP. Healthspan. <https://www.whoop.com/thelocker/healthspan/>
+
+### Strain
+
+- Karvonen MJ, Kentala E, Mustala O (1957). The effects of training on heart
+  rate; a longitudinal study. Ann Med Exp Biol Fenn 35:307-15 (heart-rate
+  reserve). [PubMed 13470504](https://pubmed.ncbi.nlm.nih.gov/13470504/)
+- Tanaka H, Monahan KD, Seals DR (2001). Age-predicted maximal heart rate
+  revisited. J Am Coll Cardiol 37:153-6 (`208 − 0.7 × age`).
+  [doi:10.1016/S0735-1097(00)01054-8](https://doi.org/10.1016/S0735-1097(00)01054-8)
+- Morton RH, Fitz-Clarke JR, Banister EW (1990). Modeling human performance in
+  running. J Appl Physiol 69:1171-7 (Banister TRIMP weighting and the
+  fitness-fatigue model). [doi:10.1152/jappl.1990.69.3.1171](https://doi.org/10.1152/jappl.1990.69.3.1171)
+- Vermeire K et al. (2021). Int J Sports Physiol Perform (training-load
+  methods are not interchangeable, so one is kept).
+  [doi:10.1123/ijspp.2020-0662](https://doi.org/10.1123/ijspp.2020-0662)
+
+### Strain target by Recovery (HRV-guided training)
+
+- Kiviniemi AM et al. (2007). Eur J Appl Physiol.
+  [doi:10.1007/s00421-007-0552-2](https://doi.org/10.1007/s00421-007-0552-2)
+- Vesterinen V et al. (2016). Med Sci Sports Exerc (same gains with fewer hard
+  sessions). [doi:10.1249/MSS.0000000000000910](https://doi.org/10.1249/MSS.0000000000000910)
+- Javaloyes A et al. (2019). Training prescription guided by heart-rate
+  variability in cycling. Int J Sports Physiol Perform 14:23-32.
+  [doi:10.1123/ijspp.2018-0122](https://doi.org/10.1123/ijspp.2018-0122)
+
+### Recovery and the early warning
+
+- Task Force of the ESC and NASPE (1996). Heart rate variability: standards of
+  measurement, physiological interpretation and clinical use. Circulation
+  93:1043-65 (RMSSD). [PubMed 8598068](https://pubmed.ncbi.nlm.nih.gov/8598068/)
+- Plews DJ et al. (2013). Training adaptation and heart rate variability in
+  elite endurance athletes. Sports Med 43:773-81 (ln RMSSD against a personal
+  rolling baseline). [doi:10.1007/s40279-013-0071-8](https://doi.org/10.1007/s40279-013-0071-8)
+- Dial MB et al. (2025). Validation of nocturnal resting heart rate and heart
+  rate variability in consumer wearables. Physiol Rep 13:e70527 (night-time
+  RHR and HRV from wearables).
+  [doi:10.14814/phy2.70527](https://doi.org/10.14814/phy2.70527)
+- Mishra T et al. (2020). Nat Biomed Eng (resting HR above the personal
+  baseline flags infection before symptoms).
+  [doi:10.1038/s41551-020-00640-6](https://doi.org/10.1038/s41551-020-00640-6)
+- Alavi A et al. (2022). Real-time alerting system for COVID-19 and other
+  stress events using wearable data. Nat Med 28:175-184 (also triggered by
+  alcohol and stress). [doi:10.1038/s41591-021-01593-2](https://doi.org/10.1038/s41591-021-01593-2)
+- Smarr BL et al. (2020). Sci Rep (skin temperature rises with illness).
+  [doi:10.1038/s41598-020-78355-6](https://doi.org/10.1038/s41598-020-78355-6)
+- Pietilä J et al. (2018). JMIR Ment Health (alcohol lowers HRV-based recovery
+  during sleep, which is why alcohol nights leave the baseline).
+  [doi:10.2196/mental.9519](https://doi.org/10.2196/mental.9519)
+- Berryhill S et al. (2020). J Clin Sleep Med (WHOOP sleep, heart rate and
+  breathing rate against polysomnography).
+  [doi:10.5664/jcsm.8356](https://doi.org/10.5664/jcsm.8356)
+- Miller DJ et al. (2022). Sensors (wearables are weak on individual sleep
+  stages, so Recovery uses the night-average HRV).
+  [doi:10.3390/s22166317](https://doi.org/10.3390/s22166317)
+
+### Sleep Performance and naps
+
+- Van Dongen HPA et al. (2003). Sleep 26:117-26 (sleep debt accumulates;
+  implies a need of about 8.2 h, the starting sleep need).
+  [doi:10.1093/sleep/26.2.117](https://doi.org/10.1093/sleep/26.2.117)
+- Kredlow MA et al. (2015). The effects of physical activity on sleep: a
+  meta-analytic review. J Behav Med 38:427-49 (exercise lengthens sleep only
+  slightly, so the Strain term is small and learned).
+  [doi:10.1007/s10865-015-9617-6](https://doi.org/10.1007/s10865-015-9617-6)
+- Phillips AJK et al. (2017). Sci Rep (the Sleep Regularity Index).
+  [doi:10.1038/s41598-017-03171-4](https://doi.org/10.1038/s41598-017-03171-4)
+- Vienne J et al. (2012). Sleep (a nap reduces the next night's sleep pressure).
+  [doi:10.5665/sleep.1992](https://doi.org/10.5665/sleep.1992)
+- Centofanti S et al. (2015). Accid Anal Prev (naps and split sleep).
+  [doi:10.1016/j.aap.2015.11.009](https://doi.org/10.1016/j.aap.2015.11.009)
+- Cousins JN et al. (2019). Sleep (split sleep with the same 24-hour total
+  performs like one block). [doi:10.1093/sleep/zsz018](https://doi.org/10.1093/sleep/zsz018)
+- Boudreau P et al. (2013). Sleep (heart rate and HRV in daytime sleep differ
+  from the night). [doi:10.5665/sleep.3230](https://doi.org/10.5665/sleep.3230)
+- Yamada T et al. (2015). Sleep (long naps and cardiovascular risk, an
+  association). [doi:10.5665/sleep.5246](https://doi.org/10.5665/sleep.5246)
+
+### Healthspan age
+
+- Spiegelhalter D (2012). Using speed of ageing and "microlives" to
+  communicate the effects of lifetime habits and environment. BMJ 345:e8223
+  (turning a hazard ratio into years of ageing).
+  [doi:10.1136/bmj.e8223](https://doi.org/10.1136/bmj.e8223)
+- Kodama S et al. (2009). JAMA (VO2 max: HR 0.87 per MET).
+  [doi:10.1001/jama.2009.681](https://doi.org/10.1001/jama.2009.681)
+- Nes BM et al. (2014). Med Sci Sports Exerc (VO2 max and mortality in HUNT).
+  [doi:10.1249/MSS.0000000000000219](https://doi.org/10.1249/MSS.0000000000000219)
+- Mandsager K et al. (2018). JAMA Netw Open (no upper limit to the benefit of
+  fitness). [doi:10.1001/jamanetworkopen.2018.3605](https://doi.org/10.1001/jamanetworkopen.2018.3605)
+- Kaminsky LA, Arena R, Myers J (2015). Reference standards for
+  cardiorespiratory fitness: data from FRIEND. Mayo Clin Proc 90:1515-23
+  (VO2 max referent 48 for men 20-29).
+  [doi:10.1016/j.mayocp.2015.07.026](https://doi.org/10.1016/j.mayocp.2015.07.026)
+- Zhang D et al. (2016). CMAJ (resting HR: HR 1.09 per +10 bpm).
+  [doi:10.1503/cmaj.150535](https://doi.org/10.1503/cmaj.150535)
+- Paluch AE et al. (2022). Lancet Public Health (daily steps).
+  [doi:10.1016/S2468-2667(21)00302-9](https://doi.org/10.1016/S2468-2667(21)00302-9)
+- Lee DH et al. (2022). Circulation (moderate and vigorous minutes).
+  [doi:10.1161/CIRCULATIONAHA.121.058162](https://doi.org/10.1161/CIRCULATIONAHA.121.058162)
+- Momma H et al. (2022). Br J Sports Med (strength training, best at 30 to 60
+  min a week). [doi:10.1136/bjsports-2021-105061](https://doi.org/10.1136/bjsports-2021-105061)
+- Cappuccio FP et al. (2010). Sleep (sleep duration).
+  [doi:10.1093/sleep/33.5.585](https://doi.org/10.1093/sleep/33.5.585)
+- Windred DP et al. (2024). Sleep (sleep regularity and mortality).
+  [doi:10.1093/sleep/zsad253](https://doi.org/10.1093/sleep/zsad253)
+
+### Other analyses
+
+- Heart-rate zones use heart-rate reserve (Karvonen 1957, WHOOP zones page above).
+- Fitness, fatigue and form: Morton, Fitz-Clarke, Banister 1990 (above).
+- Share of easy time: Seiler S (2010). Int J Sports Physiol Perform 5:276-91.
+  [doi:10.1123/ijspp.5.3.276](https://doi.org/10.1123/ijspp.5.3.276); Muñoz I
+  et al. (2014). Int J Sports Physiol Perform.
+  [doi:10.1123/ijspp.2012-0350](https://doi.org/10.1123/ijspp.2012-0350)
+- Aerobic decoupling: Coyle EF, González-Alonso J (2001). Exerc Sport Sci Rev
+  (cardiovascular drift). [doi:10.1097/00003677-200104000-00009](https://doi.org/10.1097/00003677-200104000-00009).
+  The efficiency factor and the 5 % decoupling rule come from coaching
+  practice: [TrainingPeaks](https://www.trainingpeaks.com/blog/efficiency-factor-and-decoupling/).
+- Heart-rate recovery: Cole CR et al. (1999). N Engl J Med.
+  [doi:10.1056/NEJM199910283411804](https://doi.org/10.1056/NEJM199910283411804);
+  Cole CR et al. (2000). Ann Intern Med.
+  [doi:10.7326/0003-4819-132-7-200004040-00007](https://doi.org/10.7326/0003-4819-132-7-200004040-00007)

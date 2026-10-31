@@ -246,7 +246,8 @@ against a copy of your real data, without a running server.
   the device in `data/settings.json`. Tested with a Pixel Watch 3 only.
 - Healthspan age compares VO2 max with norms for men aged 20-29. Adjust `REF`
   and `VO2_CAP` in `src/health_dashboard/scores/healthspan.py` for other ages or for women.
-- The scores are modelled on WHOOP's published descriptions, not WHOOP's
+- The scores are modelled on WHOOP's published descriptions and published
+  research (see [docs/scores.md#sources](docs/scores.md#sources)), not WHOOP's
   algorithms. Use them as a personal trend, not a medical measurement.
 
 ## How this was built
