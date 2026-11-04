@@ -1,9 +1,14 @@
 """Monthly Google Health Takeout, with as little clicking as possible.
 
-Google Takeout cannot export monthly on its own (its schedule is every two
-months) and every download needs your passkey, so this does the rest around
-those two clicks. A scheduled task ("Health Takeout" on Windows; a systemd
-timer or cron elsewhere) runs it every 30 minutes and at logon:
+Every Takeout download needs your passkey, so this does the rest around
+the clicks Google insists on. A scheduled task ("Health Takeout" on Windows;
+a systemd timer or cron elsewhere) runs it every 30 minutes and at logon.
+
+With Takeout's own monthly schedule ("Ein Jahr lang jeden Monat exportieren",
+12 exports), record its start once with `--scheduled YYYY-MM-DD`. Then you only
+download: Google builds each export on that day of the month, and if none has
+been imported by the next day, this opens the Takeout downloads page once; a
+toast nudges three days later. After the 12th export it falls back to:
 
   1. From the 1st of each month (09:00-22:00, once per month) it opens the
      Takeout page with only Google Health preselected. You click
@@ -15,7 +20,7 @@ timer or cron elsewhere) runs it every 30 minutes and at logon:
      swaps it in as data/takeout, keeps the ZIP in data/takeout_zips (only
      the newest one) and shows a toast with what came in.
 
-If no new export has arrived by the 4th, a toast reminds you once; clicking it
+Without a schedule, if no new export has arrived by the 4th, a toast reminds you once; clicking it
 opens the same page, which also shows the download button of a ready export.
 Toasts are Windows only; elsewhere they go to the log (and notify-send, if
 installed). State lives in data/.takeout_state.json, actions are logged to
@@ -23,6 +28,7 @@ data/logs/takeout.log.
 
     pythonw -m health_dashboard takeout-auto
     python -m health_dashboard takeout-auto --downloads DIR --no-remind   # testing
+    python -m health_dashboard takeout-auto --scheduled 2026-11-04       # schedule set up
 """
 
 import argparse
@@ -37,7 +43,7 @@ import time
 import webbrowser
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .. import locks, procs
@@ -46,6 +52,8 @@ from ..config import get_paths
 DOWNLOADS = Path.home() / "Downloads"
 
 TAKEOUT_URL = "https://takeout.google.com/settings/takeout/custom/fitbit"
+MANAGE_URL = "https://takeout.google.com/manage"
+SCHEDULED_EXPORTS = 12
 PREFIX = "Takeout/Google Health/"
 ZIP_NAME = re.compile(r"takeout-(\d{8}T\d{6}Z)-.*\.zip$", re.I)
 REMIND_HOURS = range(9, 22)
@@ -120,11 +128,40 @@ def month_start() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m01T000000Z")
 
 
-def remind(f: Files, state: dict) -> None:
-    now = datetime.now()
+def schedule_day(state: dict, today: date) -> int | None:
+    """Day of the month Takeout's own schedule exports on, while it runs."""
+    try:
+        start = date.fromisoformat(state["scheduled_from"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    months = (today.year - start.year) * 12 + today.month - start.month
+    return start.day if 0 <= months < SCHEDULED_EXPORTS else None
+
+
+def remind(f: Files, state: dict, now: datetime | None = None) -> None:
+    now = now or datetime.now()
     month = now.strftime("%Y-%m")
     if state.get("last_stamp", "") >= month_start():
         return  # this month's export is already in
+    day = schedule_day(state, now.date())
+    if day is not None:
+        # Google builds the export itself; only the download is left.
+        if now.hour not in REMIND_HOURS:
+            return
+        if state.get("opened_month") != month and now.day > day:
+            webbrowser.open(MANAGE_URL)
+            state["opened_month"] = month
+            save_state(f, state)
+            log(f, "opened the Takeout downloads page for this month's scheduled export")
+        elif (state.get("opened_month") == month and state.get("nudged_month") != month
+              and now.day >= day + 4):
+            toast(f, "Health export not downloaded",
+                  "This month's scheduled Google Health export is not imported yet. "
+                  "Click to download it on this PC (it expires a week after it is made).", MANAGE_URL)
+            state["nudged_month"] = month
+            save_state(f, state)
+            log(f, "reminded about the scheduled export")
+        return
     if state.get("opened_month") != month and now.hour in REMIND_HOURS:
         webbrowser.open(TAKEOUT_URL)
         state["opened_month"] = month
@@ -242,10 +279,17 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--downloads", type=Path, default=DOWNLOADS)
     ap.add_argument("--no-remind", action="store_true")
+    ap.add_argument("--scheduled", type=date.fromisoformat, metavar="YYYY-MM-DD",
+                    help="record that Takeout's monthly schedule (12 exports) started on this day")
     args = ap.parse_args(argv)
 
     f = Files.of(get_paths())
     state = load_state(f)
+    if args.scheduled:
+        state["scheduled_from"] = args.scheduled.isoformat()
+        save_state(f, state)
+        log(f, f"Takeout's monthly schedule recorded, from {args.scheduled}")
+        return 0
     exports = new_exports(args.downloads, state)
     if exports:
         if not take_lock(f):

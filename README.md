@@ -183,7 +183,8 @@ As a hook in `.claude/settings.json` (paths are yours):
 
 Optional: `health takeout-import` loads a Google Takeout export
 (`Takeout/Google Health`), and `health takeout-auto` can run from a
-scheduled task to pick up new Takeout ZIPs from Downloads and import them.
+scheduled task to pick up new Takeout ZIPs from Downloads and import them (`--scheduled YYYY-MM-DD` tells it Takeout's own monthly
+schedule is on, so it only nudges you to download).
 
 ## Notes and exclusions
 
